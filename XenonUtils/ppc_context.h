@@ -703,6 +703,25 @@ inline simde__m128i simde_mm_vctsxs(simde__m128 src1)
     return simde_mm_andnot_si128(simde_mm_castps_si128(xmm2), simde_mm_castps_si128(dest));
 }
 
+// vctuxs / vcfpuxws128: float -> u32, truncate toward zero, saturate to [0, 0xFFFFFFFF],
+// NaN -> 0. Same result as Xenia's VECTOR_CONVERT_F2I with ARITHMETIC_UNSIGNED
+// (src/xenia/cpu/backend/x64/x64_seq_vector.cc). Written so that it does not depend on what
+// cvttps_epi32 returns for out-of-range lanes (x86 gives INT_MIN, NEON saturates): every lane
+// whose conversion is used is already inside [0, 2^31); the rest are overridden by the masks.
+inline simde__m128i simde_mm_vctuxs(simde__m128 src1)
+{
+    const simde__m128 two31 = simde_mm_set1_ps(2147483648.0f);
+    // Ordered compares, so NaN lanes fail all three and end up as 0.
+    simde__m128 keep = simde_mm_cmpge_ps(src1, simde_mm_setzero_ps());          // negative lanes -> 0
+    simde__m128 big = simde_mm_cmpge_ps(src1, two31);                             // [2^31, ...): convert (x - 2^31), add 2^31 back
+    simde__m128 sat = simde_mm_cmpge_ps(src1, simde_mm_set1_ps(4294967296.0f));  // [2^32, +inf]: 0xFFFFFFFF
+    simde__m128 x = simde_mm_blendv_ps(src1, simde_mm_sub_ps(src1, two31), big);
+    simde__m128i r = simde_mm_cvttps_epi32(x);
+    r = simde_mm_add_epi32(r, simde_mm_and_si128(simde_mm_castps_si128(big), simde_mm_set1_epi32(INT_MIN)));
+    r = simde_mm_or_si128(r, simde_mm_castps_si128(sat));
+    return simde_mm_and_si128(r, simde_mm_castps_si128(keep));
+}
+
 inline simde__m128i simde_mm_vsr(simde__m128i a, simde__m128i b)
 {
     b = simde_mm_srli_epi64(simde_mm_slli_epi64(b, 61), 61);

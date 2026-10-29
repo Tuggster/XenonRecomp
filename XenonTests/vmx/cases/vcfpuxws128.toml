@@ -1,0 +1,310 @@
+# vcfpuxws128 (VMX128 form of vctuxs): float -> unsigned 32-bit, scaled by 2^uimm.
+#
+# Reference: xenia src/xenia/cpu/ppc/ppc_emit_altivec.cc InstrEmit_vctuxs_ (shared by vctuxs and
+# vcfpuxws128): v = Mul(VB, splat(2^uimm)); v = VectorConvertF2I(v, ARITHMETIC_UNSIGNED).
+# Lowered by src/xenia/cpu/backend/x64/x64_seq_vector.cc VECTOR_CONVERT_F2I (unsigned, non-AVX512
+# path): vmaxps with 0 (NaN and negatives -> 0), values >= 2^31 are shifted down by 2^31 before
+# vcvttps2dq (truncation) and shifted back after, and lanes that vcvttps2dq could not represent
+# (>= 2^32, +inf) are OR'd to 0xFFFFFFFF. Net semantics, which are also the AltiVec ISA's:
+#   truncate toward zero, saturate to [0, 0xFFFFFFFF], NaN -> 0.
+# Xenia's AVX512 path disagrees for NaN: its _CMP_NLT_UQ mask is true for unordered lanes, so
+# vcvttps2udq gives 0xFFFFFFFF there. We follow the non-AVX512 path and the ISA (NaN -> 0).
+# XenonRecomp implements this with simde_mm_vctuxs (XenonUtils/ppc_context.h), written so the
+# result does not depend on cvttps_epi32's out-of-range behaviour (x86: INT_MIN; NEON: saturate).
+#
+# Every Halo Wars site uses scale 0 (12x v1,v63,0; 4x v63,v63,0; v125,v63,0; v127,v63,0).
+# Scales 3 and 31 are covered too (31 is what Xenia's own tests use).
+#
+# Encoding (XenonTests/vmx/encode.py): VX128_3, OP 6, xop 624; uimm in bits 16..20.
+# vaddfp128 v10,v10,v10 (0x154A5010) is the "prior VMX float op" used to make the recompiler's
+# flush-mode state already VMX before the convert, so both the enableFlushMode-emitting and the
+# non-emitting paths are run. fadd f1,f1,f2 (0xFC21102A) puts the state in FPU mode first.
+
+# ---------------------------------------------------------------------------------------
+# Xenia's own test vectors (src/xenia/cpu/ppc/testing/instr_vctuxs.s), run through the 128 form.
+
+[[case]]
+name = "xenia_test_vctuxs_1_zero_scale31"
+mnemonic = "vcfpuxws128"
+source = "xenia src/xenia/cpu/ppc/testing/instr_vctuxs.s test_vctuxs_1 (0 * 2^31)"
+insns = [0x187F0270]   # vcfpuxws128 v3,v0,31
+[case.in]
+v0 = { u32 = [0x00000000, 0x00000000, 0x00000000, 0x00000000] }
+[case.out]
+v0 = { u32 = [0x00000000, 0x00000000, 0x00000000, 0x00000000] }
+v3 = { u32 = [0x00000000, 0x00000000, 0x00000000, 0x00000000] }
+
+[[case]]
+name = "xenia_test_vctuxs_2_negzero_scale31"
+mnemonic = "vcfpuxws128"
+source = "xenia src/xenia/cpu/ppc/testing/instr_vctuxs.s test_vctuxs_2 (-0 * 2^31)"
+insns = [0x187F0270]   # vcfpuxws128 v3,v0,31
+[case.in]
+v0 = { u32 = [0x80000000, 0x80000000, 0x80000000, 0x80000000] }
+[case.out]
+v3 = { u32 = [0x00000000, 0x00000000, 0x00000000, 0x00000000] }
+
+[[case]]
+name = "xenia_test_vctuxs_3_min_subnormal_scale31"
+mnemonic = "vcfpuxws128"
+source = "xenia src/xenia/cpu/ppc/testing/instr_vctuxs.s test_vctuxs_3 (smallest positive subnormal * 2^31; 0 whether or not the input is flushed)"
+insns = [0x187F0270]   # vcfpuxws128 v3,v0,31
+[case.in]
+v0 = { u32 = [0x00000001, 0x00000001, 0x00000001, 0x00000001] }
+[case.out]
+v3 = { u32 = [0x00000000, 0x00000000, 0x00000000, 0x00000000] }
+
+[[case]]
+name = "xenia_test_vctuxs_4_max_subnormal_scale31"
+mnemonic = "vcfpuxws128"
+source = "xenia src/xenia/cpu/ppc/testing/instr_vctuxs.s test_vctuxs_4 (largest subnormal * 2^31)"
+insns = [0x187F0270]   # vcfpuxws128 v3,v0,31
+[case.in]
+v0 = { u32 = [0x007FFFFF, 0x007FFFFF, 0x007FFFFF, 0x007FFFFF] }
+[case.out]
+v3 = { u32 = [0x00000000, 0x00000000, 0x00000000, 0x00000000] }
+
+[[case]]
+name = "xenia_test_vctuxs_5_one"
+mnemonic = "vcfpuxws128"
+source = "xenia src/xenia/cpu/ppc/testing/instr_vctuxs.s test_vctuxs_5 (+1 * 2^0)"
+insns = [0x18600270]   # vcfpuxws128 v3,v0,0
+[case.in]
+v0 = { u32 = [0x3F800000, 0x3F800000, 0x3F800000, 0x3F800000] }
+[case.out]
+v0 = { u32 = [0x3F800000, 0x3F800000, 0x3F800000, 0x3F800000] }
+v3 = { u32 = [0x00000001, 0x00000001, 0x00000001, 0x00000001] }
+
+[[case]]
+name = "xenia_test_vctuxs_6_minus_one"
+mnemonic = "vcfpuxws128"
+source = "xenia src/xenia/cpu/ppc/testing/instr_vctuxs.s test_vctuxs_6 (-1 * 2^0 -> 0)"
+insns = [0x18600270]   # vcfpuxws128 v3,v0,0
+[case.in]
+v0 = { u32 = [0xBF800000, 0xBF800000, 0xBF800000, 0xBF800000] }
+[case.out]
+v3 = { u32 = [0x00000000, 0x00000000, 0x00000000, 0x00000000] }
+
+[[case]]
+name = "xenia_test_vctuxs_7_two_pow_31"
+mnemonic = "vcfpuxws128"
+source = "xenia src/xenia/cpu/ppc/testing/instr_vctuxs.s test_vctuxs_7 (2^31 -> 0x80000000, above the signed range)"
+insns = [0x18600270]   # vcfpuxws128 v3,v0,0
+[case.in]
+v0 = { u32 = [0x4F000000, 0x4F000000, 0x4F000000, 0x4F000000] }
+[case.out]
+v3 = { u32 = [0x80000000, 0x80000000, 0x80000000, 0x80000000] }
+
+[[case]]
+name = "xenia_test_vctuxs_8_two_pow_31_times_1_5"
+mnemonic = "vcfpuxws128"
+source = "xenia src/xenia/cpu/ppc/testing/instr_vctuxs.s test_vctuxs_8 (1.5 * 2^31 -> 0xC0000000)"
+insns = [0x18600270]   # vcfpuxws128 v3,v0,0
+[case.in]
+v0 = { u32 = [0x4F400000, 0x4F400000, 0x4F400000, 0x4F400000] }
+[case.out]
+v3 = { u32 = [0xC0000000, 0xC0000000, 0xC0000000, 0xC0000000] }
+
+[[case]]
+name = "xenia_test_vctuxs_9_two_pow_32_saturates"
+mnemonic = "vcfpuxws128"
+source = "xenia src/xenia/cpu/ppc/testing/instr_vctuxs.s test_vctuxs_9 (2^32 -> 0xFFFFFFFF)"
+insns = [0x18600270]   # vcfpuxws128 v3,v0,0
+[case.in]
+v0 = { u32 = [0x4F800000, 0x4F800000, 0x4F800000, 0x4F800000] }
+[case.out]
+v3 = { u32 = [0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF] }
+
+[[case]]
+name = "xenia_test_vctuxs_10_pos_inf_saturates"
+mnemonic = "vcfpuxws128"
+source = "xenia src/xenia/cpu/ppc/testing/instr_vctuxs.s test_vctuxs_10 (+inf -> 0xFFFFFFFF)"
+insns = [0x18600270]   # vcfpuxws128 v3,v0,0
+[case.in]
+v0 = { u32 = [0x7F800000, 0x7F800000, 0x7F800000, 0x7F800000] }
+[case.out]
+v3 = { u32 = [0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF] }
+
+[[case]]
+name = "xenia_test_vctuxs_11_neg_inf_is_zero"
+mnemonic = "vcfpuxws128"
+source = "xenia src/xenia/cpu/ppc/testing/instr_vctuxs.s test_vctuxs_11 (-inf -> 0)"
+insns = [0x18600270]   # vcfpuxws128 v3,v0,0
+[case.in]
+v0 = { u32 = [0xFF800000, 0xFF800000, 0xFF800000, 0xFF800000] }
+[case.out]
+v3 = { u32 = [0x00000000, 0x00000000, 0x00000000, 0x00000000] }
+
+# ---------------------------------------------------------------------------------------
+# NaN, truncation, saturation edges, mixed lanes.
+
+[[case]]
+name = "nan_lanes_are_zero"
+mnemonic = "vcfpuxws128"
+source = "xenia src/xenia/cpu/backend/x64/x64_seq_vector.cc VECTOR_CONVERT_F2I unsigned: vmaxps(src, 0) returns 0 for NaN (non-AVX512 path and AltiVec ISA; Xenia's AVX512 path would give 0xFFFFFFFF) (quiet, signalling, negative NaN, all-ones)"
+insns = [0x18600270]   # vcfpuxws128 v3,v0,0
+[case.in]
+v0 = { u32 = [0x7FC00000, 0xFFC00000, 0x7F800001, 0xFFFFFFFF] }
+[case.out]
+v3 = { u32 = [0x00000000, 0x00000000, 0x00000000, 0x00000000] }
+
+[[case]]
+name = "truncates_toward_zero"
+mnemonic = "vcfpuxws128"
+source = "xenia x64_seq_vector.cc VECTOR_CONVERT_F2I unsigned: vcvttps2dq truncates. [1.5, 1.9999999, 0.99999994, 2.5] -> [1, 1, 0, 2]"
+insns = [0x18600270]   # vcfpuxws128 v3,v0,0
+[case.in]
+v0 = { u32 = [0x3FC00000, 0x3FFFFFFF, 0x3F7FFFFF, 0x40200000] }
+[case.out]
+v3 = { u32 = [0x00000001, 0x00000001, 0x00000000, 0x00000002] }
+
+[[case]]
+name = "negative_fractions_and_ties_are_zero"
+mnemonic = "vcfpuxws128"
+source = "xenia x64_seq_vector.cc VECTOR_CONVERT_F2I unsigned: vmaxps clamps negatives to 0 before conversion. [-0.5, -0.99999994, -1.5, -2.5] -> 0"
+insns = [0x18600270]   # vcfpuxws128 v3,v0,0
+[case.in]
+v0 = { u32 = [0xBF000000, 0xBF7FFFFF, 0xBFC00000, 0xC0200000] }
+[case.out]
+v3 = { u32 = [0x00000000, 0x00000000, 0x00000000, 0x00000000] }
+
+[[case]]
+name = "saturation_boundaries"
+mnemonic = "vcfpuxws128"
+source = "xenia x64_seq_vector.cc VECTOR_CONVERT_F2I unsigned: largest float below 2^32 (4294967040) converts exactly; 2^31-128 and 2^31+256 straddle the signed/unsigned split; -2^31 -> 0"
+insns = [0x18600270]   # vcfpuxws128 v3,v0,0
+[case.in]
+v0 = { u32 = [0x4F7FFFFF, 0x4EFFFFFF, 0x4F000001, 0xCF000000] }
+[case.out]
+v3 = { u32 = [0xFFFFFF00, 0x7FFFFF80, 0x80000100, 0x00000000] }
+
+[[case]]
+name = "mixed_lanes"
+mnemonic = "vcfpuxws128"
+source = "xenia ppc_emit_altivec.cc InstrEmit_vctuxs_; lanes [3.0, NaN, +inf, 2^31*1.5] -> [3, 0, 0xFFFFFFFF, 0xC0000000]"
+insns = [0x18600270]   # vcfpuxws128 v3,v0,0
+[case.in]
+v0 = { u32 = [0x40400000, 0x7FC00000, 0x7F800000, 0x4F400000] }
+[case.out]
+v3 = { u32 = [0x00000003, 0x00000000, 0xFFFFFFFF, 0xC0000000] }
+
+# ---------------------------------------------------------------------------------------
+# Scale immediates. The multiply is by the float 2^uimm (exact), before the convert.
+
+[[case]]
+name = "scale3_times_eight"
+mnemonic = "vcfpuxws128"
+source = "xenia ppc_emit_altivec.cc InstrEmit_vctuxs_: Mul(VB, 2^3) then convert. [1.0, 0.125, 0.0625, 2^29] -> [8, 1, 0 (0.5 truncates), 2^32 saturates]"
+insns = [0x18630270]   # vcfpuxws128 v3,v0,3
+[case.in]
+v0 = { u32 = [0x3F800000, 0x3E000000, 0x3D800000, 0x4E000000] }
+[case.out]
+v3 = { u32 = [0x00000008, 0x00000001, 0x00000000, 0xFFFFFFFF] }
+
+[[case]]
+name = "scale31"
+mnemonic = "vcfpuxws128"
+source = "xenia ppc_emit_altivec.cc InstrEmit_vctuxs_: Mul(VB, 2^31). [1.0, 2^-31, 2^-32, 1.9999999] -> [0x80000000, 1, 0, 0xFFFFFF00]"
+insns = [0x187F0270]   # vcfpuxws128 v3,v0,31
+[case.in]
+v0 = { u32 = [0x3F800000, 0x30000000, 0x2F800000, 0x3FFFFFFF] }
+[case.out]
+v3 = { u32 = [0x80000000, 0x00000001, 0x00000000, 0xFFFFFF00] }
+
+[[case]]
+name = "scale31_specials"
+mnemonic = "vcfpuxws128"
+source = "xenia ppc_emit_altivec.cc InstrEmit_vctuxs_: [-1.0, NaN, 4.0, -inf] * 2^31 -> [0, 0, 0xFFFFFFFF, 0]"
+insns = [0x187F0270]   # vcfpuxws128 v3,v0,31
+[case.in]
+v0 = { u32 = [0xBF800000, 0x7FC00000, 0x40800000, 0xFF800000] }
+[case.out]
+v3 = { u32 = [0x00000000, 0x00000000, 0xFFFFFFFF, 0x00000000] }
+
+# ---------------------------------------------------------------------------------------
+# Game register forms (high registers, in place).
+
+[[case]]
+name = "game_form_v63_in_place"
+mnemonic = "vcfpuxws128"
+source = "xenia ppc_emit_altivec.cc InstrEmit_vcfpuxws128 (VX128_3 split fields); Halo Wars lvx128 -> vcfpuxws128 v63,v63,0 -> stvx128 (4 sites)"
+insns = [0x1BE0FA75]   # vcfpuxws128 v63,v63,0
+[case.in]
+v63 = { f32 = [255.0, 254.99998, 0.0, 65535.5] }
+[case.out]
+v63 = { u32 = [0x000000FF, 0x000000FE, 0x00000000, 0x0000FFFF] }
+
+[[case]]
+name = "game_form_v127_from_v63"
+mnemonic = "vcfpuxws128"
+source = "xenia ppc_emit_altivec.cc InstrEmit_vcfpuxws128 (VX128_3 split fields); Halo Wars vcfpuxws128 v127,v63,0"
+insns = [0x1BE0FA7D]   # vcfpuxws128 v127,v63,0
+[case.in]
+v63 = { u32 = [0x4F000000, 0xBF800000, 0x7FC00000, 0x447A0000] }   # [2^31, -1, NaN, 1000]
+[case.out]
+v63 = { u32 = [0x4F000000, 0xBF800000, 0x7FC00000, 0x447A0000] }
+v127 = { u32 = [0x80000000, 0x00000000, 0x00000000, 0x000003E8] }
+
+[[case]]
+name = "game_form_v1_from_v63"
+mnemonic = "vcfpuxws128"
+source = "xenia ppc_emit_altivec.cc InstrEmit_vcfpuxws128; Halo Wars vcfpuxws128 v1,v63,0 (12 sites)"
+insns = [0x1820FA71]   # vcfpuxws128 v1,v63,0
+[case.in]
+v63 = { u32 = [0x4F7FFFFF, 0x4F800000, 0x3F000000, 0xCF000000] }   # [2^32-256, 2^32, 0.5, -2^31]
+[case.out]
+v1 = { u32 = [0xFFFFFF00, 0xFFFFFFFF, 0x00000000, 0x00000000] }
+
+# ---------------------------------------------------------------------------------------
+# Host FP-mode interplay. The recompiler emits ctx.fpscr.enableFlushMode*() before VMX float
+# ops only when its tracked state is not already VMX, so the convert is run (a) on its own,
+# where it emits the switch itself (every case above), (b) after a VMX op that already switched,
+# and (c) after a scalar FPU op that switched the other way. The results must not depend on it.
+
+[[case]]
+name = "after_vaddfp128_flush_mode_already_on"
+mnemonic = "vaddfp128"
+source = "xenia ppc_emit_altivec.cc InstrEmit_vctuxs_; the convert follows a vaddfp128 so the recompiler emits no flush-mode switch for it"
+insns = [0x154A5010, 0x18600270]   # vaddfp128 v10,v10,v10 ; vcfpuxws128 v3,v0,0
+[case.in]
+v10 = { f32 = [1.0, 2.0, 3.0, 4.0] }
+v0 = { u32 = [0x40400000, 0x7FC00000, 0x7F800000, 0x4F400000] }
+[case.out]
+v10 = { f32 = [2.0, 4.0, 6.0, 8.0] }
+v3 = { u32 = [0x00000003, 0x00000000, 0xFFFFFFFF, 0xC0000000] }
+
+[[case]]
+name = "after_vaddfp128_saturation_boundaries"
+mnemonic = "vaddfp128"
+source = "xenia ppc_emit_altivec.cc InstrEmit_vctuxs_; saturation_boundaries with flush mode already on"
+insns = [0x154A5010, 0x18600270]   # vaddfp128 v10,v10,v10 ; vcfpuxws128 v3,v0,0
+[case.in]
+v10 = { f32 = [0.5, -0.5, 0.0, 1.0] }
+v0 = { u32 = [0x4F7FFFFF, 0x4EFFFFFF, 0x4F000001, 0xCF000000] }
+[case.out]
+v10 = { f32 = [1.0, -1.0, 0.0, 2.0] }
+v3 = { u32 = [0xFFFFFF00, 0x7FFFFF80, 0x80000100, 0x00000000] }
+
+[[case]]
+name = "after_vaddfp128_scale31"
+mnemonic = "vaddfp128"
+source = "xenia ppc_emit_altivec.cc InstrEmit_vctuxs_; scale31 with flush mode already on"
+insns = [0x154A5010, 0x187F0270]   # vaddfp128 v10,v10,v10 ; vcfpuxws128 v3,v0,31
+[case.in]
+v10 = { f32 = [1.0, 2.0, 3.0, 4.0] }
+v0 = { u32 = [0x3F800000, 0x30000000, 0x2F800000, 0x3FFFFFFF] }
+[case.out]
+v3 = { u32 = [0x80000000, 0x00000001, 0x00000000, 0xFFFFFF00] }
+
+[[case]]
+name = "after_fadd_flush_mode_was_off"
+mnemonic = "fadd"
+source = "xenia ppc_emit_altivec.cc InstrEmit_vctuxs_; a scalar fadd first puts the recompiler in FPU mode, so the convert re-enables flush mode"
+insns = [0xFC21102A, 0x18600270]   # fadd f1,f1,f2 ; vcfpuxws128 v3,v0,0
+[case.in]
+f1 = 1.5
+f2 = 2.25
+v0 = { u32 = [0x40400000, 0x7FC00000, 0x7F800000, 0x4F400000] }
+[case.out]
+f1 = 3.75
+v3 = { u32 = [0x00000003, 0x00000000, 0xFFFFFFFF, 0xC0000000] }

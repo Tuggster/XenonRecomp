@@ -1011,6 +1011,14 @@ bool Recompiler::Recompile(
         println("\t{}.f64 = float(1.0 / {}.f64);", f(insn.operands[0]), f(insn.operands[1]));
         break;
 
+    case PPC_INST_FRSQRTE:
+        // Xenia: InstrEmit_frsqrtex -> RSqrt F64, lowered to vsqrtsd + vdivsd (1.0 / sqrt(x)) on its
+        // non-AVX512 path. Exact, not the hardware estimate table; every game site refines the result
+        // with Newton-Raphson anyway. Rc (CR1) is ignored like the other FPU ops here.
+        printSetFlushMode(false);
+        println("\t{}.f64 = 1.0 / sqrt({}.f64);", f(insn.operands[0]), f(insn.operands[1]));
+        break;
+
     case PPC_INST_FRSP:
         printSetFlushMode(false);
         println("\t{}.f64 = double(float({}.f64));", f(insn.operands[0]), f(insn.operands[1]));
@@ -1848,6 +1856,18 @@ bool Recompiler::Recompile(
             println("simde_mm_load_ps({}.f32)));", v(insn.operands[1]));
         break;
 
+    case PPC_INST_VCTUXS:
+    case PPC_INST_VCFPUXWS128:
+        // Xenia: InstrEmit_vctuxs_ -> Mul by 2^uimm, VectorConvertF2I(ARITHMETIC_UNSIGNED):
+        // truncate, saturate to [0, 0xFFFFFFFF], NaN -> 0 (simde_mm_vctuxs in ppc_context.h).
+        printSetFlushMode(true);
+        print("\tsimde_mm_store_si128((simde__m128i*){}.u32, simde_mm_vctuxs(", v(insn.operands[0]));
+        if (insn.operands[2] != 0)
+            println("simde_mm_mul_ps(simde_mm_load_ps({}.f32), simde_mm_set1_ps({}))));", v(insn.operands[1]), 1u << insn.operands[2]);
+        else
+            println("simde_mm_load_ps({}.f32)));", v(insn.operands[1]));
+        break;
+
     case PPC_INST_VCFSX:
     case PPC_INST_VCSXWFP128:
     {
@@ -2243,6 +2263,13 @@ bool Recompiler::Recompile(
     case PPC_INST_VRFIN128:
         printSetFlushMode(true);
         println("\tsimde_mm_store_ps({}.f32, simde_mm_round_ps(simde_mm_load_ps({}.f32), SIMDE_MM_FROUND_TO_NEAREST_INT | SIMDE_MM_FROUND_NO_EXC));", v(insn.operands[0]), v(insn.operands[1]));
+        break;
+
+    case PPC_INST_VRFIP:
+    case PPC_INST_VRFIP128:
+        // Xenia: InstrEmit_vrfip_ -> Round(ROUND_TO_POSITIVE_INFINITY) -> vroundps imm 0b10 (ceil).
+        printSetFlushMode(true);
+        println("\tsimde_mm_store_ps({}.f32, simde_mm_round_ps(simde_mm_load_ps({}.f32), SIMDE_MM_FROUND_TO_POS_INF | SIMDE_MM_FROUND_NO_EXC));", v(insn.operands[0]), v(insn.operands[1]));
         break;
 
     case PPC_INST_VRFIZ:
