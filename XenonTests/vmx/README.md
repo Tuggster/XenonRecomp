@@ -61,6 +61,7 @@ Fields:
 | `name` | Required. Unique in the file. |
 | `source` | Required, free text. Which Xenia file/function the expectation comes from. |
 | `insns` | Required. Big-endian instruction words as written (ints or `"0x..."` strings). |
+| `callee` | Optional. Words of a second function (`blr` implicit), laid out right after the case's code and mapped for indirect calls (`bctrl`, `blrl`) at the address `"callee"`. See `cases/blrl.toml`. |
 | `mnemonic` | Optional guard: the first word must decode to this name (as in `thirdparty/disasm/ppc-dis.c`, e.g. `"vcmpbfp128."` for the record form). |
 | `xfail` | Optional. `true` marks a known failure; see below. |
 | `[case.in]` | Initial state. Everything not listed is zero. |
@@ -71,7 +72,7 @@ Registers in `in`/`out`:
 | Key | Value |
 |-|-|
 | `v0`..`v127` | `{ u32 = [e0, e1, e2, e3] }`; lane types `u8 s8 u16 s16 u32 s32 u64 s64 f32 f64`, exactly 16 bytes' worth. Ints or hex strings; floats, `"inf"`, `"-inf"`, `"nan"`, or hex-string raw bits for `f32`/`f64`. In `out`: `"*"` ignores a lane, `"nan"` accepts any NaN, `tol = 1e-6` switches f32/f64 lanes to absolute tolerance. |
-| `r0`..`r31`, `ctr`, `lr` | 64-bit int or hex string. |
+| `r0`..`r31`, `ctr`, `lr` | 64-bit int or hex string, or a code address: `"self"` (the case's first word), `"callee"` (the callee's first word), optionally `"self + 4"` / `"callee - 8"`. An indirect call to an address nothing is mapped at fails the case. |
 | `f0`..`f31` | Float (f64), hex string for raw bits, or `{ f64 = .., tol = .. }` / `{ u64 = ".." }`. |
 | `cr0`..`cr7` | `{ lt = 0, gt = 0, eq = 1, so = 0 }`, a flag string `"eq"` / `"lt|so"` / `""`, or an int 0..15 (lt=8 gt=4 eq=2 so=1). All four bits are checked. |
 | `xer` | `{ so = 0, ov = 0, ca = 0 }` |

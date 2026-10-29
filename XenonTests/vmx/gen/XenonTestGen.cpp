@@ -117,6 +117,38 @@ namespace
         fail("{}: expected an integer or a string like \"0x1F\"", what);
     }
 
+    // Value for r*/ctr/lr: an integer as parseInt takes it, or a code address
+    // relative to the case, "self" (insns[0]) or "callee" (callee[0]), with an
+    // optional " + N" / " - N". Returns a C++ expression; run_N defines kSelf
+    // and kCallee, since addresses are only known once the code is laid out.
+    std::string parseIntOrAddr(const toml::node& n, std::string_view what, bool hasCallee)
+    {
+        if (auto s = n.value<std::string>())
+        {
+            std::string t = trim(*s);
+            for (const char* sym : { "self", "callee" })
+            {
+                size_t len = strlen(sym);
+                if (t.compare(0, len, sym) != 0)
+                    continue;
+                if (!hasCallee && sym[0] == 'c')
+                    fail("{}: \"callee\" needs a callee = [...] in the case", what);
+                std::string rest = trim(t.substr(len));
+                char sign = '+';
+                uint64_t off = 0;
+                if (!rest.empty())
+                {
+                    sign = rest[0];
+                    if (sign != '+' && sign != '-')
+                        fail("{}: '{}' is not an address (\"{}\", \"{} + 4\", \"{} - 4\")", what, *s, sym, sym, sym);
+                    off = parseInt(toml::value<std::string>(trim(rest.substr(1))), what);
+                }
+                return fmt::format("({} {} 0x{:X}ull)", sym[0] == 's' ? "kSelf" : "kCallee", sign, off);
+            }
+        }
+        return fmt::format("0x{:X}ull", parseInt(n, what));
+    }
+
     enum class LaneType { U8, S8, U16, S16, U32, S32, U64, S64, F32, F64 };
 
     struct LaneTypeInfo
@@ -466,7 +498,8 @@ namespace
     // --- Register state tables -----------------------------------------------
 
     // Emits C++ for [case.in] (isExpect = false) or [case.out] (isExpect = true).
-    std::string emitState(const toml::table& tbl, bool isExpect)
+    // hasCallee: the case has a callee, so "callee" addresses are allowed.
+    std::string emitState(const toml::table& tbl, bool isExpect, bool hasCallee)
     {
         std::string out;
         const char* section = isExpect ? "out" : "in";
@@ -503,11 +536,11 @@ namespace
                 }
                 case 'r':
                 {
-                    uint64_t v = parseInt(value, what);
+                    std::string v = parseIntOrAddr(value, what, hasCallee);
                     if (isExpect)
-                        out += fmt::format("\trun.expectU64(\"r{0}\", ctx.r{0}.u64, 0x{1:X}ull);\n", index, v);
+                        out += fmt::format("\trun.expectU64(\"r{0}\", ctx.r{0}.u64, {1});\n", index, v);
                     else
-                        out += fmt::format("\tctx.r{}.u64 = 0x{:X}ull;\n", index, v);
+                        out += fmt::format("\tctx.r{}.u64 = {};\n", index, v);
                     break;
                 }
                 case 'f':
@@ -589,12 +622,12 @@ namespace
 
             if (k == "ctr" || k == "lr")
             {
-                uint64_t v = parseInt(value, what);
+                std::string v = parseIntOrAddr(value, what, hasCallee);
                 std::string member = k == "ctr" ? "ctx.ctr.u64" : "ctx.lr";
                 if (isExpect)
-                    out += fmt::format("\trun.expectU64(\"{}\", {}, 0x{:X}ull);\n", k, member, v);
+                    out += fmt::format("\trun.expectU64(\"{}\", {}, {});\n", k, member, v);
                 else
-                    out += fmt::format("\t{} = 0x{:X}ull;\n", member, v);
+                    out += fmt::format("\t{} = {};\n", member, v);
                 continue;
             }
 
@@ -635,11 +668,15 @@ namespace
         std::string source;
         std::string mnemonic;
         std::vector<uint32_t> insns;
+        std::vector<uint32_t> callee;   // optional second function, laid out after insns (blr implicit)
         bool xfail = false;
         std::string setup;
         std::string checks;
 
         std::string symbol;
+        std::string calleeSymbol;
+        size_t base = 0;                // guest address of insns[0]
+        size_t calleeBase = 0;          // guest address of callee[0], if any
         std::string disasm;
         std::string notImplemented;
         std::string badCase;
@@ -648,15 +685,31 @@ namespace
     constexpr uint32_t kBlr = 0x4E800020;
     constexpr size_t kImageBase = 0x82000000;
 
+    std::vector<uint32_t> parseWords(const toml::node* n, const char* key)
+    {
+        auto arr = n ? n->as_array() : nullptr;
+        if (arr == nullptr || arr->empty())
+            fail("{} must be a non-empty array of 32-bit instruction words", key);
+        std::vector<uint32_t> words;
+        for (size_t i = 0; i < arr->size(); i++)
+        {
+            uint64_t w = parseInt(*arr->get(i), fmt::format("{}[{}]", key, i));
+            if (w > 0xFFFFFFFFull)
+                fail("{}[{}]: 0x{:X} is not a 32-bit word", key, i, w);
+            words.push_back(uint32_t(w));
+        }
+        return words;
+    }
+
     void parseCase(const toml::table& tbl, GenCase& c)
     {
-        static const char* kKeys[] = { "name", "source", "insns", "xfail", "mnemonic", "in", "out" };
+        static const char* kKeys[] = { "name", "source", "insns", "callee", "xfail", "mnemonic", "in", "out" };
         for (auto&& [key, value] : tbl)
         {
             bool known = false;
             for (auto k : kKeys) known |= key.str() == k;
             if (!known)
-                fail("unknown key '{}' (name, source, insns, xfail, mnemonic, in, out)", key.str());
+                fail("unknown key '{}' (name, source, insns, callee, xfail, mnemonic, in, out)", key.str());
         }
 
         auto name = tbl["name"].value<std::string>();
@@ -678,28 +731,21 @@ namespace
             c.xfail = *b;
         }
 
-        auto insns = tbl["insns"].as_array();
-        if (insns == nullptr || insns->empty())
-            fail("insns must be a non-empty array of 32-bit instruction words");
-        for (size_t i = 0; i < insns->size(); i++)
-        {
-            uint64_t w = parseInt(*insns->get(i), fmt::format("insns[{}]", i));
-            if (w > 0xFFFFFFFFull)
-                fail("insns[{}]: 0x{:X} is not a 32-bit word", i, w);
-            c.insns.push_back(uint32_t(w));
-        }
+        c.insns = parseWords(tbl.get("insns"), "insns");
+        if (auto callee = tbl.get("callee"))
+            c.callee = parseWords(callee, "callee");
 
         if (auto in = tbl.get("in"))
         {
             auto t = in->as_table();
             if (t == nullptr) fail("[case.in] must be a table");
-            c.setup = emitState(*t, false);
+            c.setup = emitState(*t, false, !c.callee.empty());
         }
 
         auto outNode = tbl.get("out");
         auto outTbl = outNode ? outNode->as_table() : nullptr;
         if (outTbl == nullptr) fail("[case.out] is required");
-        c.checks = emitState(*outTbl, true);
+        c.checks = emitState(*outTbl, true, !c.callee.empty());
         if (c.checks.empty()) fail("[case.out] has no expectations");
     }
 
@@ -725,6 +771,12 @@ namespace
             else
             {
                 out += "\tPPCContext& ctx = run.ctx;\n\t(void)ctx;\n";
+                out += fmt::format("\tconstexpr uint64_t kSelf = 0x{:X}ull; (void)kSelf;\n", c.base);
+                if (!c.calleeSymbol.empty())
+                {
+                    out += fmt::format("\tconstexpr uint64_t kCallee = 0x{:X}ull;\n", c.calleeBase);
+                    out += fmt::format("\trun.mapFunc(uint32_t(kCallee), __imp__{});\n", c.calleeSymbol);
+                }
                 out += c.setup;
                 out += fmt::format("\trun.call(__imp__{});\n", c.symbol);
                 out += c.checks;
@@ -838,11 +890,18 @@ int main(int argc, char* argv[])
             if (cases[i].badCase.empty() && cases[i].name == cases[j].name)
                 cases[i].badCase = fmt::format("duplicate case name '{}'", cases[i].name);
 
-    // Lay every case's code out back to back in one code section: words + blr.
+    // Lay every case's code out back to back in one code section: words + blr,
+    // followed by the callee's words + blr when the case has one.
+    auto codeBytes = [](const std::vector<uint32_t>& words) { return (words.size() + 1) * 4; };
     size_t codeSize = 0;
     for (auto& c : cases)
-        if (c.badCase.empty())
-            codeSize += (c.insns.size() + 1) * 4;
+    {
+        if (!c.badCase.empty())
+            continue;
+        codeSize += codeBytes(c.insns);
+        if (!c.callee.empty())
+            codeSize += codeBytes(c.callee);
+    }
 
     Recompiler recompiler;
     recompiler.image.base = kImageBase;
@@ -851,6 +910,18 @@ int main(int argc, char* argv[])
     uint8_t* code = recompiler.image.data.get();
     recompiler.image.Map(".text", 0, uint32_t(codeSize), SectionFlags_Code, code);
 
+    // Writes words + blr at offset.
+    auto place = [&](const std::vector<uint32_t>& words, size_t offset)
+    {
+        for (size_t k = 0; k < words.size(); k++)
+        {
+            uint32_t be = ByteSwap(words[k]);
+            memcpy(code + offset + k * 4, &be, 4);
+        }
+        uint32_t blr = ByteSwap(kBlr);
+        memcpy(code + offset + words.size() * 4, &blr, 4);
+    };
+
     size_t offset = 0;
     for (size_t i = 0; i < cases.size(); i++)
     {
@@ -858,45 +929,68 @@ int main(int argc, char* argv[])
         if (!c.badCase.empty())
             continue;
 
-        size_t base = kImageBase + offset;
-        size_t size = (c.insns.size() + 1) * 4;
-        for (size_t k = 0; k < c.insns.size(); k++)
+        c.base = kImageBase + offset;
+        size_t size = codeBytes(c.insns);
+        place(c.insns, offset);
+        size_t calleeSize = 0;
+        if (!c.callee.empty())
         {
-            uint32_t be = ByteSwap(c.insns[k]);
-            memcpy(code + offset + k * 4, &be, 4);
+            c.calleeBase = c.base + size;
+            calleeSize = codeBytes(c.callee);
+            place(c.callee, offset + size);
         }
-        uint32_t blr = ByteSwap(kBlr);
-        memcpy(code + offset + c.insns.size() * 4, &blr, 4);
 
         // Disassemble up front so bad words are reported with the case, and so
         // the disassembly can be shown alongside failures.
         std::vector<std::string> names;
-        for (size_t k = 0; k < c.insns.size() && c.badCase.empty(); k++)
+        auto disassemble = [&](const std::vector<uint32_t>& words, size_t base, const char* key)
         {
-            ppc_insn insn{};
-            ppc::Disassemble(code + offset + k * 4, 4, base + k * 4, insn);
-            if (insn.opcode == nullptr)
+            bool isCallee = &words == &c.callee;
+            for (size_t k = 0; k < words.size(); k++)
             {
-                c.badCase = fmt::format("insns[{}]: 0x{:08X} does not disassemble", k, c.insns[k]);
-                break;
+                ppc_insn insn{};
+                ppc::Disassemble(code + (base - kImageBase) + k * 4, 4, base + k * 4, insn);
+                if (insn.opcode == nullptr)
+                {
+                    c.badCase = fmt::format("{}[{}]: 0x{:08X} does not disassemble", key, k, words[k]);
+                    return;
+                }
+                c.disasm += fmt::format("{}0x{:08X}  {} {}{}", c.disasm.empty() ? "" : "\n", words[k], insn.opcode->name, insn.op_str, isCallee ? "  (callee)" : "");
+                if (!isCallee && k == 0 && !c.mnemonic.empty() && c.mnemonic != insn.opcode->name)
+                {
+                    c.badCase = fmt::format("mnemonic mismatch: case says '{}' but 0x{:08X} is '{}'", c.mnemonic, words[0], insn.opcode->name);
+                    return;
+                }
+                if (isCallee)
+                    continue;
+                bool dup = false;
+                for (auto& n : names) dup |= n == insn.opcode->name;
+                if (!dup) names.push_back(insn.opcode->name);
             }
-            c.disasm += fmt::format("{}0x{:08X}  {} {}", k ? "\n" : "", c.insns[k], insn.opcode->name, insn.op_str);
-            if (k == 0 && !c.mnemonic.empty() && c.mnemonic != insn.opcode->name)
-                c.badCase = fmt::format("mnemonic mismatch: case says '{}' but 0x{:08X} is '{}'", c.mnemonic, c.insns[0], insn.opcode->name);
-            bool dup = false;
-            for (auto& n : names) dup |= n == insn.opcode->name;
-            if (!dup) names.push_back(insn.opcode->name);
-        }
-        offset += size;
+        };
+        disassemble(c.insns, c.base, "insns");
+        if (c.badCase.empty() && !c.callee.empty())
+            disassemble(c.callee, c.calleeBase, "callee");
+        offset += size + calleeSize;
         if (!c.badCase.empty())
             continue;
 
         c.symbol = fmt::format("vmx_{}_{}", ident(group), ident(c.name));
-        recompiler.image.symbols.emplace(c.symbol, base, size, Symbol_Function);
+        recompiler.image.symbols.emplace(c.symbol, c.base, size, Symbol_Function);
+        if (!c.callee.empty())
+        {
+            c.calleeSymbol = c.symbol + "_callee";
+            recompiler.image.symbols.emplace(c.calleeSymbol, c.calleeBase, calleeSize, Symbol_Function);
+        }
 
-        Function fn{ base, size };
+        Function fn{ c.base, size };
         size_t before = recompiler.out.size();
         bool recognized = recompiler.Recompile(fn);
+        if (recognized && !c.callee.empty())
+        {
+            Function calleeFn{ c.calleeBase, calleeSize };
+            recognized = recompiler.Recompile(calleeFn);
+        }
         std::string_view emitted(recompiler.out.data() + before, recompiler.out.size() - before);
 
         std::string joined;
