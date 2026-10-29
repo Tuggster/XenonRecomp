@@ -712,7 +712,19 @@ bool Recompiler::Recompile(
         break;
 
     case PPC_INST_BLRL:
-        println("__builtin_debugtrap();");
+        if (config.skipLr)
+        {
+            // Without LR tracking the target is unknown.
+            println("\t__builtin_debugtrap();");
+        }
+        else
+        {
+            // Target is LR as it was before the link update.
+            println("\t{}.u64 = ctx.lr;", temp());
+            println("\tctx.lr = 0x{:X};", base + 4);
+            println("\tPPC_CALL_INDIRECT_FUNC({}.u32);", temp());
+        }
+        csrState = CSRState::Unknown; // the call could change it
         break;
 
     case PPC_INST_BLT:
