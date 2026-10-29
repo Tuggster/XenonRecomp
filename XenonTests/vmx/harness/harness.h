@@ -14,6 +14,9 @@
 #define PPC_IMAGE_SIZE 0x10000ull
 #define PPC_CODE_BASE 0x82000000ull
 #define PPC_CODE_SIZE 0x10000ull
+// Same table lookup as the ppc_context.h default, but a target nothing is
+// mapped at (see Run::mapFunc) fails the case instead of crashing the suite.
+#define PPC_CALL_INDIRECT_FUNC(x) do { if (!XenonTest::callIndirect(ctx, base, uint32_t(x))) return; } while (0)
 #include <ppc_context.h>
 
 namespace XenonTest
@@ -43,6 +46,9 @@ namespace XenonTest
         bool trapped = false;
 
         void call(PPCFunc* fn);
+
+        // Makes fn the target of PPC_CALL_INDIRECT_FUNC(guest) (the real PPC_LOOKUP_FUNC table).
+        void mapFunc(uint32_t guest, PPCFunc* fn);
 
         void writeMem(uint32_t addr, const uint8_t* bytes, size_t count);
 
@@ -75,6 +81,10 @@ namespace XenonTest
 
     // Called by the __builtin_debugtrap() replacement in generated code.
     void trapHit();
+
+    // Called by the PPC_CALL_INDIRECT_FUNC replacement: calls the function mapped
+    // at guest and returns true, or records the unmapped target and returns false.
+    bool callIndirect(PPCContext& ctx, uint8_t* base, uint32_t guest);
 
     std::string formatVec(const PPCVRegister& v);
 }

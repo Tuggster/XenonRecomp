@@ -7,10 +7,26 @@
 namespace XenonTest
 {
     static bool g_trapped = false;
+    static std::string g_unmappedCall; // first indirect call to an unmapped target, if any
 
     void trapHit()
     {
         g_trapped = true;
+    }
+
+    bool callIndirect(PPCContext& ctx, uint8_t* base, uint32_t guest)
+    {
+        PPCFunc* fn = nullptr;
+        if (guest >= PPC_CODE_BASE && guest < PPC_CODE_BASE + PPC_CODE_SIZE && (guest & 3) == 0)
+            fn = PPC_LOOKUP_FUNC(base, guest);
+        if (fn == nullptr)
+        {
+            if (g_unmappedCall.empty())
+                g_unmappedCall = fmt::format("indirect call to 0x{:X}, where no function is mapped (callee = [..] maps one)", guest);
+            return false;
+        }
+        fn(ctx, base);
+        return true;
     }
 
     std::vector<const Case*>& registry()
@@ -44,10 +60,18 @@ namespace XenonTest
     void Run::call(PPCFunc* fn)
     {
         g_trapped = false;
+        g_unmappedCall.clear();
         fn(ctx, base);
         trapped = g_trapped;
         if (trapped)
             failures.push_back("hit __builtin_debugtrap() at runtime (instruction form not implemented)");
+        if (!g_unmappedCall.empty())
+            failures.push_back(g_unmappedCall);
+    }
+
+    void Run::mapFunc(uint32_t guest, PPCFunc* fn)
+    {
+        PPC_LOOKUP_FUNC(base, guest) = fn;
     }
 
     void Run::writeMem(uint32_t addr, const uint8_t* bytes, size_t count)
