@@ -1,0 +1,96 @@
+# vrfip128 (VMX128 form of vrfip): round each float lane to an integral value toward +infinity.
+#
+# Reference: xenia src/xenia/cpu/ppc/ppc_emit_altivec.cc InstrEmit_vrfip_ (shared by vrfip and
+# vrfip128): Round(VB, ROUND_TO_POSITIVE_INFINITY), lowered by
+# src/xenia/cpu/backend/x64/x64_sequences.cc ROUND_V128 to vroundps imm 0b10 (ceil, current
+# rounding mode ignored). So: ceil per lane, sign of zero preserved (ceil(-0.5) = -0), NaN
+# stays NaN, infinities unchanged, |x| >= 2^23 already integral.
+# XenonRecomp emits simde_mm_round_ps(SIMDE_MM_FROUND_TO_POS_INF | NO_EXC), which is vrndpq_f32
+# on NEON and roundps on x86, next to the existing vrfin/vrfiz/vrfim cases.
+#
+# The one Halo Wars site is vrfip128 v62,v62 right after vmulfp128 v62,v62,v60 and before
+# vcfpsxws128 v62,v62,0 (a ceil-then-convert).
+#
+# Encoding (XenonTests/vmx/encode.py): VX128_3, OP 6, xop 944.
+
+[[case]]
+name = "positive_fractions"
+mnemonic = "vrfip128"
+source = "xenia src/xenia/cpu/ppc/ppc_emit_altivec.cc InstrEmit_vrfip_ (same inputs as testing/instr_vrfin.s test_vrfin_1, ceil instead of nearest): [1.0, 1.5, 1.1, 1.9] -> [1, 2, 2, 2]"
+insns = [0x186023B0]   # vrfip128 v3,v4
+[case.in]
+v4 = { u32 = [0x3F800000, 0x3FC00000, 0x3F8CCCCD, 0x3FF33333] }
+[case.out]
+v3 = { u32 = [0x3F800000, 0x40000000, 0x40000000, 0x40000000] }
+v4 = { u32 = [0x3F800000, 0x3FC00000, 0x3F8CCCCD, 0x3FF33333] }
+
+[[case]]
+name = "negative_fractions"
+mnemonic = "vrfip128"
+source = "xenia ppc_emit_altivec.cc InstrEmit_vrfip_ (inputs of instr_vrfin.s test_vrfin_2): [-1.0, -1.5, -1.1, -1.9] -> [-1, -1, -1, -1]"
+insns = [0x186023B0]   # vrfip128 v3,v4
+[case.in]
+v4 = { u32 = [0xBF800000, 0xBFC00000, 0xBF8CCCCD, 0xBFF33333] }
+[case.out]
+v3 = { u32 = [0xBF800000, 0xBF800000, 0xBF800000, 0xBF800000] }
+
+[[case]]
+name = "ties_round_up_not_to_even"
+mnemonic = "vrfip128"
+source = "xenia x64_sequences.cc ROUND_V128 ROUND_TO_POSITIVE_INFINITY = vroundps 0b10: [0.5, 1.5, 2.5, -2.5] -> [1, 2, 3, -2]"
+insns = [0x186023B0]   # vrfip128 v3,v4
+[case.in]
+v4 = { u32 = [0x3F000000, 0x3FC00000, 0x40200000, 0xC0200000] }
+[case.out]
+v3 = { u32 = [0x3F800000, 0x40000000, 0x40400000, 0xC0000000] }
+
+[[case]]
+name = "signed_zeros_and_small_negatives_keep_sign"
+mnemonic = "vrfip128"
+source = "xenia x64_sequences.cc ROUND_V128 vroundps: [+0, -0, -0.5, -0.99999994] -> [+0, -0, -0, -0] (IEEE roundToIntegralTowardPositive keeps the sign)"
+insns = [0x186023B0]   # vrfip128 v3,v4
+[case.in]
+v4 = { u32 = [0x00000000, 0x80000000, 0xBF000000, 0xBF7FFFFF] }
+[case.out]
+v3 = { u32 = [0x00000000, 0x80000000, 0x80000000, 0x80000000] }
+
+[[case]]
+name = "inf_nan_pass_through"
+mnemonic = "vrfip128"
+source = "xenia x64_sequences.cc ROUND_V128 vroundps: [+inf, -inf, NaN, -NaN] -> [+inf, -inf, NaN, NaN]"
+insns = [0x186023B0]   # vrfip128 v3,v4
+[case.in]
+v4 = { u32 = [0x7F800000, 0xFF800000, 0x7FC00000, 0xFFC00000] }
+[case.out]
+v3 = { f32 = ["inf", "-inf", "nan", "nan"] }
+
+[[case]]
+name = "large_magnitudes_already_integral"
+mnemonic = "vrfip128"
+source = "xenia x64_sequences.cc ROUND_V128 vroundps: 8388607.5 -> 8388608; 2^23, 2^23+1 and -2^31 are unchanged"
+insns = [0x186023B0]   # vrfip128 v3,v4
+[case.in]
+v4 = { u32 = [0x4AFFFFFF, 0x4B000000, 0x4B000001, 0xCF000000] }
+[case.out]
+v3 = { u32 = [0x4B000000, 0x4B000000, 0x4B000001, 0xCF000000] }
+
+[[case]]
+name = "tiny_positive_rounds_to_one"
+mnemonic = "vrfip128"
+source = "xenia x64_sequences.cc ROUND_V128 vroundps: [1.1754944e-38 (min normal), 0.99999994, 1.0000001, 100.00001] -> [1, 1, 2, 101]"
+insns = [0x186023B0]   # vrfip128 v3,v4
+[case.in]
+v4 = { u32 = [0x00800000, 0x3F7FFFFF, 0x3F800001, 0x42C80001] }
+[case.out]
+v3 = { u32 = [0x3F800000, 0x3F800000, 0x40000000, 0x42CA0000] }
+
+[[case]]
+name = "game_form_v62_in_place_after_vmulfp128"
+mnemonic = "vmulfp128"
+source = "xenia ppc_emit_altivec.cc InstrEmit_vrfip128 (VX128_3 split fields); Halo Wars 0x828A8E14: vmulfp128 v62,v62,v60 ; vrfip128 v62,v62"
+insns = [0x17DEE0B5, 0x1BC0F3B5]   # vmulfp128 v62,v62,v60 ; vrfip128 v62,v62
+[case.in]
+v62 = { f32 = [1.25, -1.25, 3.0, -0.125] }
+v60 = { f32 = [2.0, 2.0, 0.5, 2.0] }
+[case.out]
+v62 = { u32 = [0x40400000, 0xC0000000, 0x40000000, 0x80000000] }   # [2.5 -> 3, -2.5 -> -2, 1.5 -> 2, -0.25 -> -0]

@@ -1,0 +1,243 @@
+# frsqrte: scalar double floating reciprocal square root estimate, frD <- 1 / sqrt(frB).
+#
+# Reference: xenia src/xenia/cpu/ppc/ppc_emit_fpu.cc InstrEmit_frsqrtex: RSqrt(LoadFPR(FRB)),
+# lowered by src/xenia/cpu/backend/x64/x64_sequences.cc RSQRT_F64. On the non-AVX512 path
+# (every mainstream CPU Xenia runs on) that is vsqrtsd followed by vdivsd from 1.0: the exact
+# IEEE sqrt, then the exact division, each correctly rounded. Its constant folder
+# (src/xenia/cpu/hir/value.cc Value::RSqrt) is the same 1.0 / std::sqrt(x). The real Xenon
+# estimate (a table lookup, ~1 part in 4096; see the disabled expectations in
+# src/xenia/cpu/ppc/testing/instr_frsqrte.s, e.g. 1.0 -> 0.99975585937500000) is NOT what Xenia
+# computes, and XenonRecomp follows Xenia: `f.f64 = 1.0 / sqrt(x.f64)`. Only Xenia's AVX512
+# path (vrsqrt14sd, a 14-bit estimate) differs, and it matches neither.
+#
+# Every Halo Wars site (frsqrte f13,f0 x2, f6,f10, f9,f12) feeds the result through one or two
+# Newton-Raphson steps (fmul/fnmsub/fmul/fmul with 3.0 and 0.5), which converge from either an
+# estimate or the exact value; see `game_sequence_newton_raphson`.
+#
+# IEEE special cases, as vsqrtsd/vdivsd give them: +0 -> +inf, -0 -> -inf, +inf -> +0,
+# -inf and negative -> NaN (invalid), NaN -> NaN. The scalar path runs with flush mode off
+# (printSetFlushMode(false)), so subnormal inputs are honoured.
+#
+# Encoding: A-form, OP 63, xop 26: 0xFC000000 | frt<<21 | frb<<11 | 26<<1 | rc.
+# frsqrte f1,f1 = 0xFC200834. XenonRecomp ignores Rc (CR1) for every FPU op, so `frsqrte.`
+# only checks the result. Expected bits were computed with Python's 1.0 / math.sqrt(x), which
+# is the same two correctly-rounded operations.
+
+[[case]]
+name = "xenia_test_frsqrte_1_one"
+mnemonic = "frsqrte"
+source = "xenia src/xenia/cpu/ppc/testing/instr_frsqrte.s test_frsqrte_1 input (1.0); expectation from ppc_emit_fpu.cc InstrEmit_frsqrtex -> RSQRT_F64 (1/sqrt(1) = 1.0, not the hardware 0.99975585937500000)"
+insns = [0xFC200834]   # frsqrte f1,f1
+[case.in]
+f1 = 1.0
+[case.out]
+f1 = 1.0
+
+[[case]]
+name = "xenia_test_frsqrte_2_sixty_four"
+mnemonic = "frsqrte"
+source = "xenia testing/instr_frsqrte.s test_frsqrte_2 input (64.0); RSQRT_F64 gives exactly 0.125"
+insns = [0xFC200834]   # frsqrte f1,f1
+[case.in]
+f1 = 64.0
+[case.out]
+f1 = 0.125
+
+[[case]]
+name = "xenia_test_frsqrte_3_half"
+mnemonic = "frsqrte"
+source = "xenia testing/instr_frsqrte.s test_frsqrte_3 input (0.5); RSQRT_F64: 1/sqrt(0.5) = 0x3FF6A09E667F3BCC (1.414213562373095)"
+insns = [0xFC200834]   # frsqrte f1,f1
+[case.in]
+f1 = 0.5
+[case.out]
+f1 = "0x3FF6A09E667F3BCC"
+
+[[case]]
+name = "exact_powers_of_four"
+mnemonic = "frsqrte"
+source = "xenia x64_sequences.cc RSQRT_F64 vsqrtsd+vdivsd: 1/sqrt(4) = 0.5 exactly; separate register"
+insns = [0xFC201834]   # frsqrte f1,f3
+[case.in]
+f3 = 4.0
+[case.out]
+f1 = 0.5
+f3 = 4.0
+
+[[case]]
+name = "quarter_gives_two"
+mnemonic = "frsqrte"
+source = "xenia x64_sequences.cc RSQRT_F64: 1/sqrt(0.25) = 2.0 exactly"
+insns = [0xFC200834]   # frsqrte f1,f1
+[case.in]
+f1 = 0.25
+[case.out]
+f1 = 2.0
+
+[[case]]
+name = "irrational_results_double_rounded"
+mnemonic = "frsqrte"
+source = "xenia x64_sequences.cc RSQRT_F64: sqrt then divide, each rounded to nearest; 1/sqrt(2) = 0x3FE6A09E667F3BCC, 1/sqrt(3) = 0x3FE279A74590331D, 1/sqrt(0.1) = 0x40094C583ADA5B52, 1/sqrt(100) = 0x3FB999999999999A"
+insns = [0xFC200834, 0xFC401834, 0xFC602834, 0xFC803834]   # frsqrte f1,f1 ; frsqrte f2,f3 ; frsqrte f3,f5 ; frsqrte f4,f7
+[case.in]
+f1 = 2.0
+f3 = 3.0
+f5 = 0.1
+f7 = 100.0
+[case.out]
+f1 = "0x3FE6A09E667F3BCC"
+f2 = "0x3FE279A74590331D"
+f3 = "0x40094C583ADA5B52"
+f4 = "0x3FB999999999999A"
+
+[[case]]
+name = "positive_zero_gives_pos_inf"
+mnemonic = "frsqrte"
+source = "xenia x64_sequences.cc RSQRT_F64: sqrt(+0) = +0, 1/+0 = +inf"
+insns = [0xFC200834]   # frsqrte f1,f1
+[case.in]
+f1 = 0.0
+[case.out]
+f1 = "inf"
+
+[[case]]
+name = "negative_zero_gives_neg_inf"
+mnemonic = "frsqrte"
+source = "xenia x64_sequences.cc RSQRT_F64: sqrt(-0) = -0 (IEEE), 1/-0 = -inf"
+insns = [0xFC200834]   # frsqrte f1,f1
+[case.in]
+f1 = "0x8000000000000000"
+[case.out]
+f1 = "-inf"
+
+[[case]]
+name = "pos_inf_gives_zero"
+mnemonic = "frsqrte"
+source = "xenia x64_sequences.cc RSQRT_F64: sqrt(+inf) = +inf, 1/+inf = +0"
+insns = [0xFC200834]   # frsqrte f1,f1
+[case.in]
+f1 = "inf"
+[case.out]
+f1 = "0x0000000000000000"
+
+[[case]]
+name = "neg_inf_gives_nan"
+mnemonic = "frsqrte"
+source = "xenia x64_sequences.cc RSQRT_F64: sqrt(-inf) is invalid -> NaN"
+insns = [0xFC200834]   # frsqrte f1,f1
+[case.in]
+f1 = "-inf"
+[case.out]
+f1 = "nan"
+
+[[case]]
+name = "negative_gives_nan"
+mnemonic = "frsqrte"
+source = "xenia x64_sequences.cc RSQRT_F64: sqrt(-4) is invalid -> NaN"
+insns = [0xFC200834]   # frsqrte f1,f1
+[case.in]
+f1 = -4.0
+[case.out]
+f1 = "nan"
+
+[[case]]
+name = "nan_in_nan_out"
+mnemonic = "frsqrte"
+source = "xenia x64_sequences.cc RSQRT_F64: NaN propagates through sqrt and div"
+insns = [0xFC200834]   # frsqrte f1,f1
+[case.in]
+f1 = "nan"
+[case.out]
+f1 = "nan"
+
+[[case]]
+name = "extreme_magnitudes"
+mnemonic = "frsqrte"
+source = "xenia x64_sequences.cc RSQRT_F64: 1/sqrt(1e300) = 0x20CA2FE76A3F9475, 1/sqrt(1e-300) = 0x5F138D352E5096AF, 1/sqrt(DBL_MAX) = 0x1FF0000000000001"
+insns = [0xFC200834, 0xFC401834, 0xFC602834]   # frsqrte f1,f1 ; frsqrte f2,f3 ; frsqrte f3,f5
+[case.in]
+f1 = 1e300
+f3 = 1e-300
+f5 = "0x7FEFFFFFFFFFFFFF"
+[case.out]
+f1 = "0x20CA2FE76A3F9475"
+f2 = "0x5F138D352E5096AF"
+f3 = "0x1FF0000000000001"
+
+[[case]]
+name = "subnormal_input_not_flushed"
+mnemonic = "frsqrte"
+source = "xenia x64_sequences.cc RSQRT_F64 with Xenia's scalar FPU mode (no DAZ): 1/sqrt(5e-324) = 0x6180000000000000, 1/sqrt(DBL_MIN) = 0x5FE0000000000000. XenonRecomp emits disableFlushMode before scalar FPU ops."
+insns = [0xFC200834, 0xFC401834]   # frsqrte f1,f1 ; frsqrte f2,f3
+[case.in]
+f1 = "0x0000000000000001"
+f3 = "0x0010000000000000"
+[case.out]
+f1 = "0x6180000000000000"
+f2 = "0x5FE0000000000000"
+
+[[case]]
+name = "after_vmx_op_flush_mode_switches_back"
+mnemonic = "vaddfp128"
+source = "xenia x64_sequences.cc RSQRT_F64; a vaddfp128 first leaves the recompiler in VMX (flush) mode, so frsqrte must emit disableFlushMode before honouring a subnormal input"
+insns = [0x154A5010, 0xFC200834]   # vaddfp128 v10,v10,v10 ; frsqrte f1,f1
+[case.in]
+v10 = { f32 = [1.0, 2.0, 3.0, 4.0] }
+f1 = "0x0000000000000001"
+[case.out]
+v10 = { f32 = [2.0, 4.0, 6.0, 8.0] }
+f1 = "0x6180000000000000"
+
+[[case]]
+name = "record_form_result_only"
+mnemonic = "frsqrte."
+source = "xenia ppc_emit_fpu.cc InstrEmit_frsqrtex with Rc (UpdateFPSCR); XenonRecomp ignores CR1 for FPU ops, so only the value is checked: 1/sqrt(64) = 0.125"
+insns = [0xFC602035]   # frsqrte. f3,f4
+[case.in]
+f4 = 64.0
+[case.out]
+f3 = 0.125
+
+# ---------------------------------------------------------------------------------------
+# Game register forms and the Newton-Raphson sequence the game wraps around it.
+
+[[case]]
+name = "game_forms"
+mnemonic = "frsqrte"
+source = "xenia ppc_emit_fpu.cc InstrEmit_frsqrtex (A-form FRT/FRB fields); Halo Wars frsqrte f13,f0 ; frsqrte f6,f10 ; frsqrte f9,f12"
+insns = [0xFDA00034, 0xFCC05034, 0xFD206034]   # frsqrte f13,f0 ; frsqrte f6,f10 ; frsqrte f9,f12
+[case.in]
+f0 = 16.0
+f10 = 0.0625
+f12 = 2.0
+[case.out]
+f13 = 0.25
+f6 = 4.0
+f9 = "0x3FE6A09E667F3BCC"
+f0 = 16.0
+f10 = 0.0625
+f12 = 2.0
+
+[[case]]
+name = "game_sequence_newton_raphson"
+mnemonic = "frsqrte"
+source = "Halo Wars 0x82392EA4 sequence: frsqrte f9,f12 ; fmul f8,f12,f9 ; fnmsub f8,f8,f9,f0 ; fmul f9,f8,f9 ; fmul f9,f9,f13 with f0 = 3.0, f13 = 0.5 (one NR step y*(3 - x*y*y)/2). From Xenia's exact RSQRT_F64 the step is a fixed point to within an ulp: x = 0.1 -> 0x40094C583ADA5B52, x = 3.0 -> 0x3FE279A74590331C (python, same op sequence)"
+insns = [0xFD206034, 0xFD0C0272, 0xFD08027C, 0xFD280272, 0xFD290372]   # frsqrte f9,f12 ; fmul f8,f12,f9 ; fnmsub f8,f8,f9,f0 ; fmul f9,f8,f9 ; fmul f9,f9,f13
+[case.in]
+f12 = 0.1
+f0 = 3.0
+f13 = 0.5
+[case.out]
+f9 = "0x40094C583ADA5B52"
+
+[[case]]
+name = "game_sequence_newton_raphson_three"
+mnemonic = "frsqrte"
+source = "Halo Wars 0x82392EA4 sequence (see game_sequence_newton_raphson) with x = 3.0: 0x3FE279A74590331C, one ulp below 1/sqrt(3) after the NR step"
+insns = [0xFD206034, 0xFD0C0272, 0xFD08027C, 0xFD280272, 0xFD290372]   # frsqrte f9,f12 ; fmul f8,f12,f9 ; fnmsub f8,f8,f9,f0 ; fmul f9,f8,f9 ; fmul f9,f9,f13
+[case.in]
+f12 = 3.0
+f0 = 3.0
+f13 = 0.5
+[case.out]
+f9 = "0x3FE279A74590331C"
