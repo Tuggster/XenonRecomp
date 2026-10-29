@@ -2026,52 +2026,150 @@ bool Recompiler::Recompile(
     }
 
     case PPC_INST_VPKD3D128:
-        // TODO: vectorize somehow?
-        // NOTE: handling vector reversal here too
-        printSetFlushMode(true);
-        switch (insn.operands[2])
+    {
+        // vpkd3d128 vd, vb, type, pack, shift (VX128_4: type = IMM >> 2, pack = IMM & 3, shift = z).
+        // Mirrors Xenia's InstrEmit_vpkd3d128 (ppc_emit_altivec.cc) with the x64 PACK sequences
+        // (x64_seq_vector.cc), in two steps:
+        //   1. vTemp = Pack(vb, type), kept in PPC element order (element e is u32[3 - e] here, the
+        //      vector is stored reversed). 32-bit formats land in element 3 (w), 64-bit formats in
+        //      elements 2 (x|y) and 3 (z|w); the other elements are zero, except UINT_2101010,
+        //      whose x64 combine leaves the result in all four.
+        //   2. vd = Permute(control[pack][shift], vd, vTemp): the elements the control takes from
+        //      vTemp are overwritten, every other element of vd is preserved.
+        // Floats become halves the way vcvtps2ph with round-toward-zero (imm8 = 3) converts them:
+        // truncated mantissa, finite overflow saturates to 0x7BFF, inf stays inf, NaN keeps its
+        // top 10 payload bits and is quieted, half denormals are produced, float denormals are
+        // signed zero. Xenia's non-F16C fallback (half_float round_toward_zero) agrees except for
+        // signalling NaNs with an empty top payload.
+        const uint32_t type = insn.operands[2];
+        const uint32_t pack = insn.operands[3];
+        const uint32_t shift = insn.operands[4];
+
+        if (type > 6 || pack == 0)
         {
-        case 0: // D3D color
-            if (insn.operands[3] != 1)
-                fmt::println("Unexpected D3D color pack instruction at {:X}", base);
-
-            for (size_t i = 0; i < 4; i++)
-            {
-                constexpr size_t indices[] = { 3, 0, 1, 2 };
-                println("\t{}.u32[{}] = 0x404000FF;", vTemp(), i);
-                println("\t{}.f32[{}] = {}.f32[{}] < 3.0f ? 3.0f : ({}.f32[{}] > {}.f32[{}] ? {}.f32[{}] : {}.f32[{}]);", vTemp(), i, v(insn.operands[1]), i, v(insn.operands[1]), i, vTemp(), i, vTemp(), i, v(insn.operands[1]), i);
-                println("\t{}.u32 {}= uint32_t({}.u8[{}]) << {};", temp(), i == 0 ? "" : "|", vTemp(), i * 4, indices[i] * 8);
-            }
-            println("\t{}.u32[{}] = {}.u32;", v(insn.operands[0]), insn.operands[4], temp());
-            break;
-
-        case 5: // float16_4
-            if (insn.operands[3] != 2 || insn.operands[4] > 2)
-                fmt::println("Unexpected float16_4 pack instruction at {:X}", base);
-
-            for (size_t i = 0; i < 4; i++)
-            {
-        		// Strip sign from source
-        		println("\t{}.u32 = ({}.u32[{}]&0x7FFFFFFF);", temp(), v(insn.operands[1]), i);
-        		// If |source| is > 65504, clamp output to 0x7FFF, else save 8 exponent bits 
-        		println("\t{0}.u8[0] = ({1}.f32 != {1}.f32) || ({1}.f32 > 65504.0f) ? 0xFF : (({2}.u32[{3}]&0x7f800000)>>23);", vTemp(), temp(), v(insn.operands[1]), i);
-        		// If 8 exponent bits were saved, it can only be 0x8E at most
-        		// If saved, save first 10 bits of mantissa
-        		println("\t{}.u16 = {}.u8[0] != 0xFF ? (({}.u32[{}]&0x7FE000)>>13) : 0x0;", temp(), vTemp(), v(insn.operands[1]), i);
-        		// If saved and > 127-15, exponent is converted from 8 to 5-bit by subtracting 0x70
-        		// If saved but not > 127-15, clamp exponent at 0, add 0x400 to mantissa and shift right by (0x71-exponent)
-        		// If right shift is greater than 31 bits, manually clamp mantissa to 0 or else the output of the shift will be wrong
-        		println("\t{0}.u16[{1}] = {2}.u8[0] != 0xFF ? ({2}.u8[0] > 0x70 ? ((({2}.u8[0]-0x70)<<10)+{3}.u16) : (0x71-{2}.u8[0] > 31 ? 0x0 : ((0x400+{3}.u16)>>(0x71-{2}.u8[0])))) : 0x7FFF;", v(insn.operands[0]), i+(2*insn.operands[4]), vTemp(), temp());
-        		// Add back original sign
-        		println("\t{}.u16[{}] |= (({}.u32[{}]&0x80000000)>>16);", v(insn.operands[0]), i+(2*insn.operands[4]), v(insn.operands[1]), i);
-            }
-            break;
-
-        default:
+            fmt::println("Unexpected vpkd3d128 type {} pack {} shift {} at {:X}", type, pack, shift, base);
             println("\t__builtin_debugtrap();");
             break;
         }
+
+        // Xenia's MakePermuteMask(sel_x, x, sel_y, y, sel_z, z, sel_w, w): byte e describes element e,
+        // bit 2 set takes the packed value (else the old vd), bits 0..1 give the source element.
+        constexpr auto permuteMask = [](uint32_t sx, uint32_t x, uint32_t sy, uint32_t y, uint32_t sz, uint32_t z, uint32_t sw, uint32_t w)
+            { return (x << 0) | (sx << 2) | (y << 8) | (sy << 10) | (z << 16) | (sz << 18) | (w << 24) | (sw << 26); };
+        constexpr uint32_t controls[3][4] =
+        {
+            // pack 1: one 32-bit word, shift picks the element (3 - shift)
+            { permuteMask(0, 0, 0, 1, 0, 2, 1, 3), permuteMask(0, 0, 0, 1, 1, 3, 0, 3), permuteMask(0, 0, 1, 3, 0, 2, 0, 3), permuteMask(1, 3, 0, 1, 0, 2, 0, 3) },
+            // pack 2: 64 bits, shift 3 keeps only the z|w word
+            { permuteMask(0, 0, 0, 1, 1, 2, 1, 3), permuteMask(0, 0, 1, 2, 1, 3, 0, 3), permuteMask(1, 2, 1, 3, 0, 2, 0, 3), permuteMask(1, 3, 0, 1, 0, 2, 0, 3) },
+            // pack 3: as pack 2, but shift 3 puts the x|y word in w
+            { permuteMask(0, 0, 0, 1, 1, 2, 1, 3), permuteMask(0, 0, 1, 2, 1, 3, 0, 3), permuteMask(1, 2, 1, 3, 0, 2, 0, 3), permuteMask(0, 0, 0, 1, 0, 2, 1, 2) },
+        };
+
+        printSetFlushMode(true);
+
+        auto srcF = [&](size_t e) { return fmt::format("{}.f32[{}]", v(insn.operands[1]), 3 - e); }; // element e of vb
+        auto src = [&](size_t e) { return fmt::format("{}.u32[{}]", v(insn.operands[1]), 3 - e); };
+        auto dst = [&](size_t e) { return fmt::format("{}.u32[{}]", vTemp(), 3 - e); }; // element e of the packed vector
+        // Positive normal float bits as an exact hex literal, so the constants below read as Xenia's bit patterns.
+        auto f32lit = [](uint32_t bits) { return fmt::format("0x1.{:06X}p{}f", (bits & 0x7FFFFF) << 1, int((bits >> 23) & 0xFF) - 127); };
+        // temp.f32 = vminps(vmaxps(vb[e], lo), hi): a NaN input fails both compares and yields lo, like x64.
+        auto clamp = [&](size_t e, uint32_t lo, uint32_t hi)
+        {
+            println("\t{0}.f32 = {1} > {2} ? {1} : {2};", temp(), srcF(e), f32lit(lo));
+            println("\t{0}.f32 = {0}.f32 < {1} ? {0}.f32 : {1};", temp(), f32lit(hi));
+        };
+        // 16-bit element j of the packed vector = half(vb[e]).
+        auto half = [&](size_t e, size_t j)
+        {
+            println("\t{}.u32 = {} & 0x7FFFFFFF;", temp(), src(e));
+            println("\t{0}.u16[{1}] = ({2}.u32 >= 0x7F800000 ? (0x7C00 | ({2}.u32 > 0x7F800000 ? (0x200 | (({2}.u32 >> 13) & 0x3FF)) : 0)) : "
+                    "{2}.u32 >= 0x47800000 ? 0x7BFF : "
+                    "{2}.u32 >= 0x38800000 ? (({2}.u32 - 0x38000000) >> 13) : "
+                    "{2}.u32 >= 0x33800000 ? ((0x800000 | ({2}.u32 & 0x7FFFFF)) >> (126 - ({2}.u32 >> 23))) : 0) | (({3} >> 16) & 0x8000);",
+                    vTemp(), 7 - j, temp(), src(e));
+        };
+
+        const bool wide = type == 4 || type == 5 || type == 6;
+        if (type != 2)
+        {
+            for (size_t e = 0; e < (wide ? 2 : 3); e++)
+                println("\t{} = 0;", dst(e));
+        }
+
+        switch (type)
+        {
+        case 0: // D3DCOLOR: saturate to [3.0, 3.0 + 255 * 2^-22], take the low byte; w = A R G B from x y z w = R G B A
+        {
+            constexpr uint32_t bytePos[] = { 16, 8, 0, 24 };
+            for (size_t e = 0; e < 4; e++)
+            {
+                clamp(e, 0x40400000, 0x404000FF);
+                println("\t{} {}= uint32_t({}.u8) << {};", dst(3), e == 0 ? "" : "|", temp(), bytePos[e]);
+            }
+            break;
+        }
+
+        case 1: // SHORT_2: saturate to [3.0 - 32767 * 2^-22, 3.0 + 32767 * 2^-22], take the low 16 bits; w = x:y
+        case 4: // SHORT_4: same; z = x:y, w = z:w
+            for (size_t e = 0; e < (type == 1 ? 2 : 4); e++)
+            {
+                clamp(e, 0x403F8001, 0x40407FFF);
+                println("\t{} {}= uint32_t({}.u16) << {};", dst(type == 1 ? 3 : 2 + e / 2), (e & 1) ? "|" : "", temp(), (e & 1) ? 0 : 16);
+            }
+            break;
+
+        case 2: // UINT_2101010: x y z saturate to 10-bit signed, w to 2-bit unsigned; w = w:z:y:x, broadcast to every element
+        {
+            constexpr uint32_t lo[] = { 0x403FFE01, 0x403FFE01, 0x403FFE01, 0x40400000 };
+            constexpr uint32_t hi[] = { 0x404001FF, 0x404001FF, 0x404001FF, 0x40400003 };
+            constexpr uint32_t mask[] = { 0x3FF, 0x3FF, 0x3FF, 0x3 };
+            for (size_t e = 0; e < 4; e++)
+            {
+                clamp(e, lo[e], hi[e]);
+                println("\t{} {}= ({}.u32 & 0x{:X}) << {};", dst(3), e == 0 ? "" : "|", temp(), mask[e], e * 10);
+            }
+            for (size_t e = 0; e < 3; e++)
+                println("\t{} = {};", dst(e), dst(3));
+            break;
+        }
+
+        case 3: // FLOAT16_2: w = half(x):half(y)
+            half(0, 6);
+            half(1, 7);
+            break;
+
+        case 5: // FLOAT16_4: z = half(x):half(y), w = half(z):half(w)
+            for (size_t e = 0; e < 4; e++)
+                half(e, 4 + e);
+            break;
+
+        case 6: // ULONG_4202020: x y z saturate to 20-bit signed, w to 4-bit unsigned, packed as the 64-bit value w:z:y:x (x lowest)
+        {       // whose low dword is element 3 and high dword element 2, matching Xenia's XZ/YW shuffles
+            constexpr uint32_t lo[] = { 0x40380001, 0x40380001, 0x40380001, 0x40400000 };
+            constexpr uint32_t hi[] = { 0x4047FFFF, 0x4047FFFF, 0x4047FFFF, 0x4040000F };
+            clamp(0, lo[0], hi[0]);
+            println("\t{} = {}.u32 & 0xFFFFF;", dst(3), temp());
+            clamp(1, lo[1], hi[1]);
+            println("\t{} |= ({}.u32 & 0xFFF) << 20;", dst(3), temp());
+            println("\t{} = ({}.u32 & 0xFFFFF) >> 12;", dst(2), temp());
+            clamp(2, lo[2], hi[2]);
+            println("\t{} |= ({}.u32 & 0xFFFFF) << 8;", dst(2), temp());
+            clamp(3, lo[3], hi[3]);
+            println("\t{} |= ({}.u32 & 0xF) << 28;", dst(2), temp());
+            break;
+        }
+        }
+
+        const uint32_t control = controls[pack - 1][shift];
+        for (size_t e = 0; e < 4; e++)
+        {
+            const uint32_t sel = (control >> (e * 8)) & 0x7;
+            if (sel & 4)
+                println("\t{}.u32[{}] = {};", v(insn.operands[0]), 3 - e, dst(sel & 3));
+        }
         break;
+    }
 
     case PPC_INST_VPKSHUS:
     case PPC_INST_VPKSHUS128:
