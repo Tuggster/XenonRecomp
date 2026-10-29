@@ -2598,6 +2598,8 @@ bool Recompiler::Recompile(const Function& fn)
             if (!Recompile(fn, base, insn, data, switchTable, localVariables, csrState))
             {
                 fmt::println("Unrecognized instruction at 0x{:X}: {}", base, insn.opcode->name);
+                // Trap rather than silently dropping the instruction.
+                println("\t__builtin_debugtrap();");
                 allRecompiled = false;
             }
         }
