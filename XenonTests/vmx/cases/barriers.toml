@@ -1,0 +1,95 @@
+# Memory barriers: sync, lwsync, eieio, isync. They used to be dropped (sync, lwsync, eieio
+# emitted nothing; isync was unrecognized and trapped). Upstream XenonRecomp targets x86, whose
+# TSO ordering makes the omission harmless; on arm64 the host is weakly ordered, so every
+# lock-free hand-off the game guards with lwsync (311 sites in Halo Wars, plus 10 sync and 27
+# eieio) could see a flag before the data it publishes. They now emit __atomic_thread_fence:
+# sync -> SEQ_CST, lwsync/eieio -> ACQ_REL/RELEASE, isync -> ACQUIRE.
+#
+# A fence has no single-threaded register or memory effect, so these cases check that each
+# instruction is accepted (no trap), that it executes between ordinary loads and stores without
+# disturbing them, and that nothing is dereferenced. Xenia: ppc_emit_control.cc InstrEmit_sync
+# / InstrEmit_isync / InstrEmit_eieio (MemoryBarrier / nothing on x64); lwsync shares
+# InstrEmit_sync.
+#
+# Words: sync 0x7C0004AC (op 31, xo 598, L=0), lwsync 0x7C2004AC (L=1), eieio 0x7C0006AC
+# (xo 854), isync 0x4C00012C (op 19, xo 150).
+
+[[case]]
+name = "sync_between_stores_keeps_both"
+source = "xenia src/xenia/cpu/ppc/ppc_emit_control.cc InstrEmit_sync (MemoryBarrier)"
+# stw r4,0(r3); sync; stw r5,4(r3)
+insns = [0x90830000, 0x7C0004AC, 0x90A30004]
+[case.in]
+r3 = 0x10001000
+r4 = 0x11223344
+r5 = 0x55667788
+[case.out]
+r3 = 0x10001000
+r4 = 0x11223344
+r5 = 0x55667788
+mem = [ { addr = 0x10001000, bytes = "11 22 33 44 55 66 77 88" } ]
+
+[[case]]
+name = "lwsync_publish_pattern"
+source = "xenia src/xenia/cpu/ppc/ppc_emit_control.cc InstrEmit_sync (lwsync shares it); release side of a lock-free hand-off: data, lwsync, flag"
+# stw r4,0(r3); lwsync; li r6,1; stw r6,16(r3)
+insns = [0x90830000, 0x7C2004AC, 0x38C00001, 0x90C30010]
+[case.in]
+r3 = 0x10001000
+r4 = 0xCAFEBABE
+[case.out]
+r4 = 0xCAFEBABE
+r6 = 1
+mem = [ { addr = 0x10001000, bytes = "ca fe ba be" }, { addr = 0x10001010, bytes = "00 00 00 01" } ]
+
+[[case]]
+name = "lwsync_acquire_pattern"
+source = "xenia src/xenia/cpu/ppc/ppc_emit_control.cc InstrEmit_sync; acquire side: load flag, lwsync, load data"
+# lwz r6,16(r3); lwsync; lwz r7,0(r3)
+insns = [0x80C30010, 0x7C2004AC, 0x80E30000]
+[case.in]
+r3 = 0x10001000
+mem = [ { addr = 0x10001000, bytes = "ca fe ba be" }, { addr = 0x10001010, bytes = "00 00 00 01" } ]
+[case.out]
+r6 = 1
+r7 = 0xCAFEBABE
+r3 = 0x10001000
+
+[[case]]
+name = "eieio_between_stores_keeps_both"
+source = "xenia src/xenia/cpu/ppc/ppc_emit_control.cc InstrEmit_eieio (no-op on x64; store ordering)"
+# stw r4,0(r3); eieio; stw r5,4(r3)
+insns = [0x90830000, 0x7C0006AC, 0x90A30004]
+[case.in]
+r3 = 0x10001000
+r4 = 0x01020304
+r5 = 0x05060708
+[case.out]
+mem = [ { addr = 0x10001000, bytes = "01 02 03 04 05 06 07 08" } ]
+
+[[case]]
+name = "isync_after_load_keeps_registers"
+source = "xenia src/xenia/cpu/ppc/ppc_emit_control.cc InstrEmit_isync (no data effect); the lock-acquire idiom lwz, cmpwi, bne, isync"
+# lwz r6,0(r3); cmpwi r6,0; isync; addi r7,r6,1
+insns = [0x80C30000, 0x2C060000, 0x4C00012C, 0x38E60001]
+[case.in]
+r3 = 0x10001000
+mem = [ { addr = 0x10001000, bytes = "00 00 00 2a" } ]
+[case.out]
+r6 = 42
+r7 = 43
+cr0 = "gt"
+
+[[case]]
+name = "sync_does_not_touch_registers"
+mnemonic = "sync"
+source = "xenia src/xenia/cpu/ppc/ppc_emit_control.cc InstrEmit_sync; registers unchanged"
+insns = [0x7C0004AC, 0x7C2004AC, 0x7C0006AC, 0x4C00012C]
+[case.in]
+r3 = "0xDEADBEEFDEADBEEF"
+r4 = 7
+cr6 = "eq"
+[case.out]
+r3 = "0xDEADBEEFDEADBEEF"
+r4 = 7
+cr6 = "eq"

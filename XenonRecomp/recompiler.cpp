@@ -880,7 +880,9 @@ bool Recompiler::Recompile(
         break;
 
     case PPC_INST_EIEIO:
-        // no op
+        // Orders prior stores before later ones (and MMIO accesses). A release fence covers that;
+        // on arm64 it is a dmb, on x86 (TSO) a compiler barrier.
+        println("\t__atomic_thread_fence(__ATOMIC_RELEASE);");
         break;
 
     case PPC_INST_EXTSB:
@@ -1052,6 +1054,12 @@ bool Recompiler::Recompile(
     case PPC_INST_FSUBS:
         printSetFlushMode(false);
         println("\t{}.f64 = double(float({}.f64 - {}.f64));", f(insn.operands[0]), f(insn.operands[1]), f(insn.operands[2]));
+        break;
+
+    case PPC_INST_ISYNC:
+        // Instruction sync: in guest code it follows a load and a conditional branch to make the
+        // load an acquire (lock acquisition), so it is an acquire fence here.
+        println("\t__atomic_thread_fence(__ATOMIC_ACQUIRE);");
         break;
 
     case PPC_INST_LBZ:
@@ -1261,7 +1269,10 @@ bool Recompiler::Recompile(
         break;
 
     case PPC_INST_LWSYNC:
-        // no op
+        // Lightweight sync: orders every pair except store->load. Guest code uses it as the
+        // release and acquire barrier around lock-free hand-offs between threads, so it must be
+        // a real fence on weakly ordered hosts (arm64); on x86 (TSO) it is a compiler barrier.
+        println("\t__atomic_thread_fence(__ATOMIC_ACQ_REL);");
         break;
 
     case PPC_INST_LWZ:
@@ -1766,7 +1777,8 @@ bool Recompiler::Recompile(
         break;
 
     case PPC_INST_SYNC:
-        // no op
+        // Heavyweight sync: a full barrier, store->load included.
+        println("\t__atomic_thread_fence(__ATOMIC_SEQ_CST);");
         break;
 
     case PPC_INST_TDLGEI:
