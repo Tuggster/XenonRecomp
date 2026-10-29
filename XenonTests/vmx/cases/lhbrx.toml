@@ -1,0 +1,59 @@
+# lhbrx: load halfword byte-reversed indexed. EA = (RA|0) + RB;
+# RT = zero-extend(bswap16(MEM(EA, 2))), i.e. the halfword read as
+# little-endian, no sign extension. Xenia: ppc_emit_memory.cc InstrEmit_lhbrx
+# (Load(ea, INT16) without the ByteSwap the normal lhzx applies, ZeroExtend to
+# 64). Halo Wars has 10 sites, all RA != 0 and with RT == RB (lhbrx r9,r5,r9,
+# lhbrx r11,r7,r11, ...): a Huffman/bit-reader reading LE u16 from a byte
+# offset, so RB must be consumed before RT is written.
+#
+# X-form words (op 31, xo 790): (31<<26)|(rt<<21)|(ra<<16)|(rb<<11)|(790<<1)
+#   0x7C60262C lhbrx r3,r0,r4    0x7D254E2C lhbrx r9,r5,r9
+
+[[case]]
+name = "ra0_little_endian_halfword"
+mnemonic = "lhbrx"
+source = "xenia src/xenia/cpu/ppc/ppc_emit_memory.cc InstrEmit_lhbrx: RT = i48.0 || bswap(MEM(EA, 2))"
+insns = [0x7C60262C]   # lhbrx r3,r0,r4
+[case.in]
+r4 = 0x10001000
+r3 = "0xFFFFFFFFFFFFFFFF"
+mem = [ { addr = 0x10001000, bytes = "34 12 ff ff" } ]
+[case.out]
+r3 = 0x1234
+r4 = 0x10001000
+
+[[case]]
+name = "high_bit_zero_extended_not_sign_extended"
+mnemonic = "lhbrx"
+source = "xenia src/xenia/cpu/ppc/ppc_emit_memory.cc InstrEmit_lhbrx: ZeroExtend(Load(ea, INT16_TYPE), INT64_TYPE)"
+insns = [0x7C60262C]   # lhbrx r3,r0,r4
+[case.in]
+r4 = 0x10001002
+mem = [ { addr = 0x10001000, bytes = "ff ff 01 80 ff" } ]
+[case.out]
+r3 = 0x8001
+
+[[case]]
+name = "rt_equals_rb_game_form"
+mnemonic = "lhbrx"
+source = "xenia src/xenia/cpu/ppc/ppc_emit_memory.cc InstrEmit_lhbrx with CalculateEA_0 (RA != 0: EA = RA + RB, 32-bit); the Halo Wars lhbrx r9,r5,r9 form"
+insns = [0x7D254E2C]   # lhbrx r9,r5,r9
+[case.in]
+r5 = 0x10001000
+r9 = "0xFFFFFFFF00000006"   # only the low 32 bits form the EA; the high bits must not leak into RT
+mem = [ { addr = 0x10001000, bytes = "00 11 22 33 44 55 cd ab 66 77" } ]
+[case.out]
+r5 = 0x10001000
+r9 = 0xABCD
+
+[[case]]
+name = "differs_from_lhzx_byte_order"
+mnemonic = "lhbrx"
+source = "xenia src/xenia/cpu/ppc/ppc_emit_memory.cc InstrEmit_lhbrx vs InstrEmit_lhzx (which ByteSwaps): same bytes read as LE then BE"
+insns = [0x7C60262C, 0x7CA0222E]   # lhbrx r3,r0,r4 ; lhzx r5,r0,r4
+[case.in]
+r4 = 0x10001010
+mem = [ { addr = 0x10001010, bytes = "a1 b2" } ]
+[case.out]
+r3 = 0xB2A1
+r5 = 0xA1B2

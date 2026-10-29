@@ -1,0 +1,69 @@
+# lvehx: load vector element halfword indexed. EA = (RA|0) + RB. The
+# architecture defines only element (EA & 0xF) >> 1 of VD (the halfword at
+# EA & ~1) and leaves the rest undefined; Xenia (and XenonRecomp's lvewx)
+# implement it as a full lvx of the quadword EA lies in, which satisfies that
+# and is what we pin here. Xenia: ppc_emit_altivec.cc InstrEmit_lvehx
+# ("Same as lvx": ea & ~0xF, ByteSwap(Load(ea, VEC128))), expectations from
+# testing/instr_lvexx.s test_lvehx_1 / test_lvehx_2.
+# Halo Wars has 4 sites, all RA = r0: lvehx v11,r0,r25 / lvehx v12,r0,r25 /
+# lvehx v12,r0,r10.
+#
+# X-form words (op 31, xo 39): (31<<26)|(vd<<21)|(ra<<16)|(rb<<11)|(39<<1)
+#   0x7C60204E lvehx v3,r0,r4    0x7D60C84E lvehx v11,r0,r25
+#   0x7D85504E lvehx v12,r5,r10
+
+[[case]]
+name = "xenia_test_lvehx_1_aligned"
+mnemonic = "lvehx"
+source = "xenia src/xenia/cpu/ppc/testing/instr_lvexx.s test_lvehx_1; ppc_emit_altivec.cc InstrEmit_lvehx"
+insns = [0x7C60204E]   # lvehx v3,r0,r4
+[case.in]
+r4 = 0x10001000
+mem = [ { addr = 0x10001000, bytes = "00 01 02 03 04 05 06 07 08 09 0a 0b 0c 0d 0e 0f" } ]
+[case.out]
+r4 = 0x10001000
+v3 = { u32 = [0x00010203, 0x04050607, 0x08090A0B, 0x0C0D0E0F] }
+
+[[case]]
+name = "xenia_test_lvehx_2_element_2"
+mnemonic = "lvehx"
+source = "xenia src/xenia/cpu/ppc/testing/instr_lvexx.s test_lvehx_2 (EA = 0x10001004: element 2 = halfword 0x0405, whole quadword loaded)"
+insns = [0x7C60204E]   # lvehx v3,r0,r4
+[case.in]
+r4 = 0x10001004
+mem = [ { addr = 0x10001000, bytes = "00 01 02 03 04 05 06 07 08 09 0a 0b 0c 0d 0e 0f" } ]
+[case.out]
+r4 = 0x10001004
+v3 = { u16 = [0x0001, 0x0203, 0x0405, 0x0607, 0x0809, 0x0A0B, 0x0C0D, 0x0E0F] }
+
+[[case]]
+name = "odd_address_selects_element_7_game_form"
+mnemonic = "lvehx"
+source = "xenia src/xenia/cpu/ppc/ppc_emit_altivec.cc InstrEmit_lvehx: EA = 0x1000101F -> quadword 0x10001010; element (0xF >> 1) = 7 holds the halfword at EA & ~1 = 0x1000101E"
+insns = [0x7D60C84E]   # lvehx v11,r0,r25  (the Halo Wars form)
+[case.in]
+r25 = 0x1000101F
+v11 = { u32 = [0xCDCDCDCD, 0xCDCDCDCD, 0xCDCDCDCD, 0xCDCDCDCD] }
+mem = [
+  { addr = 0x10001000, bytes = "ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff" },
+  { addr = 0x10001010, bytes = "10 11 12 13 14 15 16 17 18 19 1a 1b 1c 1d be ef" },
+  { addr = 0x10001020, bytes = "ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff" },
+]
+[case.out]
+r25 = 0x1000101F
+v11 = { u16 = [0x1011, 0x1213, 0x1415, 0x1617, 0x1819, 0x1A1B, 0x1C1D, 0xBEEF] }
+
+[[case]]
+name = "ra_plus_rb_element_0"
+mnemonic = "lvehx"
+source = "xenia src/xenia/cpu/ppc/ppc_emit_altivec.cc InstrEmit_lvehx with CalculateEA_0 (RA != 0: EA = RA + RB = 0x10001020, element 0)"
+insns = [0x7D85504E]   # lvehx v12,r5,r10
+[case.in]
+r5 = 0x10001000
+r10 = 0x20
+mem = [
+  { addr = 0x10001010, bytes = "ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff" },
+  { addr = 0x10001020, bytes = "3c 00 bc 00 7b ff 00 01 80 00 7c 00 fc 00 3f 80" },
+]
+[case.out]
+v12 = { u16 = [0x3C00, 0xBC00, 0x7BFF, 0x0001, 0x8000, 0x7C00, 0xFC00, 0x3F80] }
