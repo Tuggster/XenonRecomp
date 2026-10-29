@@ -180,13 +180,16 @@ Function Function::Analyze(const void* code, size_t size, size_t base)
                 }
                 else if (op == PPC_OP_CTR)
                 {
-                    // 5th bit of BO tells cpu to ignore the counter, which is a blr/bctr otherwise it's conditional
-                    const bool conditional = !(PPC_BO(instruction) & 0x10);
+                    // BO bit 0x10 ignores the condition register and bit 0x04 skips the CTR
+                    // decrement/test; only both together (BO = 1z1zz, as in blr/bctr) make the
+                    // branch unconditional. bdzlr/bdnzlr (BO = 1z01y/1z00y) keep bit 0x10 set but
+                    // still fall through when the count says so, so the function goes on.
+                    const bool conditional = (PPC_BO(instruction) & 0x14) != 0x14;
                     if (conditional)
                     {
                         // right block's just going to return
                         const size_t lBase = (addr - base) + 4;
-                        size_t lBlock = fn.SearchBlock(lBase);
+                        size_t lBlock = fn.SearchBlock(base + lBase);
                         if (lBlock == -1)
                         {
                             blocks.emplace_back(lBase, 0);
