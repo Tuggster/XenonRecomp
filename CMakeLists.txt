@@ -28,3 +28,12 @@ add_subdirectory(${XENONUTILS_ROOT})
 if (${CMAKE_CURRENT_SOURCE_DIR} STREQUAL ${CMAKE_SOURCE_DIR})
     add_subdirectory(XenonTests)
 endif()
+
+# Instruction-level tests driven by raw instruction words (no PPC toolchain
+# needed). Registered with ctest; the test binary is built on demand by a ctest
+# fixture, so it never affects the default build.
+option(XENON_RECOMP_VMX_TESTS "Register the XenonTests/vmx suite with ctest" ON)
+if (XENON_RECOMP_VMX_TESTS)
+    enable_testing()
+    add_subdirectory(XenonTests/vmx)
+endif()

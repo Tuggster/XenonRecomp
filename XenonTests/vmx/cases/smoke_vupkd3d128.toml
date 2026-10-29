@@ -1,0 +1,60 @@
+# Harness smoke tests for the vupkd3d128 forms XenonRecomp already implements
+# (D3DCOLOR, type 0, and NORMSHORT2, type 1). The words and vectors come from
+# Xenia's own hand-coded tests.
+#
+# vupkd3d128 vd, vb, imm: VX128_3 form, OP 6, xop 2032; type = imm >> 2.
+
+[[case]]
+name = "xenia_test_vupkd3d128_d3dcolor"
+mnemonic = "vupkd3d128"
+source = "xenia src/xenia/cpu/ppc/testing/instr_vupkd3d128.s test_vupkd3d128_d3dcolor; src/xenia/cpu/backend/x64/x64_seq_vector.cc UNPACK EmitD3DCOLOR (ARGB -> RGBA, | 1.0f)"
+insns = [0x18601FF0]   # vupkd3d128 v3,v3,0
+[case.in]
+v3 = { u32 = [0xCDCDCDCD, 0xCDCDCDCD, 0xCDCDCDCD, 0x04010203] }
+[case.out]
+v3 = { u32 = [0x3F800001, 0x3F800002, 0x3F800003, 0x3F800004] }
+
+[[case]]
+name = "xenia_test_vupkd3d128_short2_0"
+mnemonic = "vupkd3d128"
+source = "xenia src/xenia/cpu/ppc/testing/instr_vupkd3d128.s test_vupkd3d128_short2_0; x64_seq_vector.cc UNPACK EmitSHORT_2 (3.0 + s16 * 2^-22, z = 0, w = 1)"
+insns = [0x18641FF0]   # vupkd3d128 v3,v3,4
+[case.in]
+v3 = { u32 = [0xCDCDCDCD, 0xCDCDCDCD, 0xCDCDCDCD, 0x7FFF8001] }
+[case.out]
+v3 = { u32 = [0x40407FFF, 0x403F8001, 0x00000000, 0x3F800000] }
+
+[[case]]
+name = "xenia_test_vupkd3d128_short2_1"
+mnemonic = "vupkd3d128"
+source = "xenia src/xenia/cpu/ppc/testing/instr_vupkd3d128.s test_vupkd3d128_short2_1; x64_seq_vector.cc UNPACK EmitSHORT_2"
+insns = [0x18641FF0]   # vupkd3d128 v3,v3,4
+[case.in]
+v3 = { u32 = [0xCDCDCDCD, 0xCDCDCDCD, 0xCDCDCDCD, 0x4000C000] }
+[case.out]
+v3 = { u32 = [0x40404000, 0x403FC000, 0x00000000, 0x3F800000] }
+
+[[case]]
+name = "short2_distinct_registers"
+mnemonic = "vupkd3d128"
+source = "xenia src/xenia/cpu/ppc/testing/instr_vupkd3d128.s test_vupkd3d128_short2_0 with vd != vb (ppc_instr.h VX128_3 VD128/VB128 fields)"
+insns = [0x18A44FF0]   # vupkd3d128 v5,v9,4
+[case.in]
+v9 = { u32 = [0xCDCDCDCD, 0xCDCDCDCD, 0xCDCDCDCD, 0x7FFF8001] }
+[case.out]
+v5 = { u32 = [0x40407FFF, 0x403F8001, 0x00000000, 0x3F800000] }
+v9 = { u32 = [0xCDCDCDCD, 0xCDCDCDCD, 0xCDCDCDCD, 0x7FFF8001] }
+
+# Known divergence: Xenia returns a quiet NaN for the -32768 input
+# (XMMUnpackSHORT_Overflow blend in EmitSHORT_2); XenonRecomp returns 0x403F8000.
+# Kept as xfail so the gap stays visible. Flip to a plain case when it is fixed.
+[[case]]
+name = "xenia_test_vupkd3d128_short2_3_negative_overflow"
+mnemonic = "vupkd3d128"
+xfail = true
+source = "xenia src/xenia/cpu/ppc/testing/instr_vupkd3d128.s test_vupkd3d128_short2_3; x64_seq_vector.cc UNPACK EmitSHORT_2 (vcmpeqps with XMMUnpackSHORT_Overflow 0x403F8000 -> XMMQNaN)"
+insns = [0x18641FF0]   # vupkd3d128 v3,v3,4
+[case.in]
+v3 = { u32 = [0xCDCDCDCD, 0xCDCDCDCD, 0xCDCDCDCD, 0x00008000] }
+[case.out]
+v3 = { f32 = [3.0, "nan", 0.0, 1.0] }

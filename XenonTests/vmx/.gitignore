@@ -1,0 +1,2 @@
+# ../.gitignore ignores *.cpp (upstream's generator writes there). Ours are sources.
+!*.cpp

@@ -1,0 +1,32 @@
+# vcmpbfp128. is not implemented in XenonRecomp yet (it emits __builtin_debugtrap).
+# These cases are marked xfail so the suite stays green; the harness reports them
+# as XFAIL with the "emits __builtin_debugtrap()" reason. Once vcmpbfp128 lands,
+# the cases will XPASS (which fails the suite) until `xfail = true` is removed.
+#
+# vcmpbfp128[.] vd, va, vb: VX128_R form, OP 6, xop 384 (448 with Rc).
+
+[[case]]
+name = "all_in_bounds_sets_cr6_eq"
+mnemonic = "vcmpbfp128."
+xfail = true
+source = "xenia src/xenia/cpu/ppc/ppc_emit_altivec.cc InstrEmit_vcmpbfp_: gt = a > b -> 0x80000000, lt = !(a >= -b) -> 0x40000000; Rc: UpdateCR6(gt | lt) -> cr6.eq (none set) / cr6.lt (all set)"
+insns = [0x180111C0]   # vcmpbfp128. v0,v1,v2
+[case.in]
+v1 = { f32 = [1.0, -1.0, 0.5, 2.0] }
+v2 = { f32 = [2.0, 2.0, 2.0, 2.0] }
+[case.out]
+v0 = { u32 = [0, 0, 0, 0] }
+cr6 = { lt = 0, gt = 0, eq = 1, so = 0 }
+
+[[case]]
+name = "out_of_bounds_flags"
+mnemonic = "vcmpbfp128."
+xfail = true
+source = "xenia src/xenia/cpu/ppc/ppc_emit_altivec.cc InstrEmit_vcmpbfp_ (x64: VectorCompareSGT/SGE FLOAT32 = vcmpgtps/vcmpgeps)"
+insns = [0x180111C0]   # vcmpbfp128. v0,v1,v2
+[case.in]
+v1 = { f32 = [3.0, -3.0, 2.0, -2.0] }
+v2 = { f32 = [2.0, 2.0, 2.0, 2.0] }
+[case.out]
+v0 = { u32 = [0x80000000, 0x40000000, 0, 0] }
+cr6 = { lt = 0, gt = 0, eq = 0, so = 0 }
