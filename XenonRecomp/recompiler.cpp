@@ -2187,8 +2187,11 @@ bool Recompiler::Recompile(
         break;
 
     case PPC_INST_VUPKD3D128:
-        // TODO: vectorize somehow?
-        // NOTE: handling vector reversal here too
+        // NOTE: handling vector reversal here too: host lane j is PPC element
+        // 3 - j, host u16[j] is PPC halfword 7 - j, host u64[0] is PPC zw.
+        // Semantics follow Xenia (ppc_emit_altivec.cc InstrEmit_vupkd3d128 and
+        // x64_seq_vector.cc UNPACK). The NORM* types return 3.0 + n * 2^-22
+        // and a quiet NaN for the most negative n (XMMUnpack*_Overflow).
         switch (insn.operands[2] >> 2)
         {
         case 0: // D3D color
@@ -2200,15 +2203,51 @@ bool Recompiler::Recompile(
             println("\t{} = {};", v(insn.operands[0]), vTemp());
             break;
 
-        case 1: // 2 shorts
+        case 1: // 2 shorts: x = 3.0 + (VB.w >> 16) * 2^-22, y = 3.0 + (VB.w & 0xFFFF) * 2^-22, z = 0, w = 1
             for (size_t i = 0; i < 2; i++)
             {
                 println("\t{}.f32 = 3.0f;", temp());
                 println("\t{}.s32 += {}.s16[{}];", temp(), v(insn.operands[1]), 1 - i);
+                println("\t{0}.u32 = {0}.u32 == 0x403F8000 ? 0x7FC00000 : {0}.u32;", temp());
                 println("\t{}.f32[{}] = {}.f32;", vTemp(), 3 - i, temp());
             }
             println("\t{}.f32[1] = 0.0f;", vTemp());
             println("\t{}.f32[0] = 1.0f;", vTemp());
+            println("\t{} = {};", v(insn.operands[0]), vTemp());
+            break;
+
+        case 2: // 2_10_10_10 (w_z_y_x) in VB.w: xyz = 3.0 + s10 * 2^-22, w = 1.0 + u2 * 2^-23
+            println("\t{}.u32 = {}.u32[0];", temp(), v(insn.operands[1]));
+            for (size_t i = 0; i < 3; i++)
+            {
+                println("\t{}.s32[{}] = 0x40400000 + (int32_t({}.u32 << {}) >> 22);", vTemp(), 3 - i, temp(), 22 - 10 * i);
+                println("\t{0}.u32[{1}] = {0}.u32[{1}] == 0x403FFE00 ? 0x7FC00000 : {0}.u32[{1}];", vTemp(), 3 - i);
+            }
+            println("\t{}.u32[0] = 0x3F800000 + ({}.u32 >> 30);", vTemp(), temp());
+            println("\t{} = {};", v(insn.operands[0]), vTemp());
+            break;
+
+        case 3: // 2 halves in VB.w: x = half(VB.w >> 16), y = half(VB.w & 0xFFFF), z = 0, w = 1
+            println("\tsimde_mm_store_ps({}.f32, simde_mm_shuffle_ps(simde_mm_set_ps(0.0f, 0.0f, 0.0f, 1.0f), simde_mm_cvtph_ps_(simde_mm_load_si128((simde__m128i*){}.u16)), SIMDE_MM_SHUFFLE(1, 0, 1, 0)));", v(insn.operands[0]), v(insn.operands[1]));
+            break;
+
+        case 4: // 4 shorts in VB.zw: 3.0 + s16 * 2^-22 each
+            println("\tsimde_mm_store_si128((simde__m128i*){}.u32, simde_mm_add_epi32(simde_mm_cvtepi16_epi32(simde_mm_load_si128((simde__m128i*){}.s16)), simde_mm_set1_epi32(0x40400000)));", vTemp(), v(insn.operands[1]));
+            println("\tsimde_mm_store_si128((simde__m128i*){}.u32, simde_mm_blendv_epi8(simde_mm_load_si128((simde__m128i*){}.u32), simde_mm_set1_epi32(0x7FC00000), simde_mm_cmpeq_epi32(simde_mm_load_si128((simde__m128i*){}.u32), simde_mm_set1_epi32(0x403F8000))));", v(insn.operands[0]), vTemp(), vTemp());
+            break;
+
+        case 5: // 4 halves in VB.zw: x = half(VB.z >> 16), y = half(VB.z & 0xFFFF), z = half(VB.w >> 16), w = half(VB.w & 0xFFFF)
+            println("\tsimde_mm_store_ps({}.f32, simde_mm_cvtph_ps_(simde_mm_load_si128((simde__m128i*){}.u16)));", v(insn.operands[0]), v(insn.operands[1]));
+            break;
+
+        case 6: // 4_20_20_20 (w_z_y_x) in VB.zw as one 64-bit value: xyz = 3.0 + s20 * 2^-22, w = 1.0 + u4 * 2^-23
+            println("\t{}.u64 = {}.u64[0];", temp(), v(insn.operands[1]));
+            for (size_t i = 0; i < 3; i++)
+            {
+                println("\t{}.s32[{}] = 0x40400000 + (int32_t(uint32_t({}.u64 >> {}) << 12) >> 12);", vTemp(), 3 - i, temp(), 20 * i);
+                println("\t{0}.u32[{1}] = {0}.u32[{1}] == 0x40380000 ? 0x7FC00000 : {0}.u32[{1}];", vTemp(), 3 - i);
+            }
+            println("\t{}.u32[0] = 0x3F800000 + uint32_t({}.u64 >> 60);", vTemp(), temp());
             println("\t{} = {};", v(insn.operands[0]), vTemp());
             break;
 

@@ -45,13 +45,12 @@ v9 = { u32 = [0xCDCDCDCD, 0xCDCDCDCD, 0xCDCDCDCD, 0x7FFF8001] }
 v5 = { u32 = [0x40407FFF, 0x403F8001, 0x00000000, 0x3F800000] }
 v9 = { u32 = [0xCDCDCDCD, 0xCDCDCDCD, 0xCDCDCDCD, 0x7FFF8001] }
 
-# Known divergence: Xenia returns a quiet NaN for the -32768 input
-# (XMMUnpackSHORT_Overflow blend in EmitSHORT_2); XenonRecomp returns 0x403F8000.
-# Kept as xfail so the gap stays visible. Flip to a plain case when it is fixed.
+# -32768 (0x8000) is the one short the pack side can never produce (vpkd3d128
+# saturates to XMMPackSHORT_Min, -32767); Xenia unpacks it to a quiet NaN
+# (XMMUnpackSHORT_Overflow blend in EmitSHORT_2) and XenonRecomp now matches.
 [[case]]
 name = "xenia_test_vupkd3d128_short2_3_negative_overflow"
 mnemonic = "vupkd3d128"
-xfail = true
 source = "xenia src/xenia/cpu/ppc/testing/instr_vupkd3d128.s test_vupkd3d128_short2_3; x64_seq_vector.cc UNPACK EmitSHORT_2 (vcmpeqps with XMMUnpackSHORT_Overflow 0x403F8000 -> XMMQNaN)"
 insns = [0x18641FF0]   # vupkd3d128 v3,v3,4
 [case.in]
