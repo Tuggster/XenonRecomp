@@ -1,0 +1,785 @@
+# vpkd3d128 vd, vb, type, pack, shift: VX128_4 form, OP 6, xop 1552.
+# Xenia decode (ppc_emit_altivec.cc InstrEmit_vpkd3d128): type = IMM >> 2,
+# pack = IMM & 3, shift = z. XenonRecomp's operands[2..4] = VD3D0/VD3D1/VD3D2
+# are the same three fields.
+#
+# Semantics are two steps. Pack(vb, type) builds a packed vector: 32-bit
+# formats (D3DCOLOR 0, SHORT_2 1, UINT_2101010 2, FLOAT16_2 3) land in element
+# 3 (w), 64-bit formats (SHORT_4 4, FLOAT16_4 5, ULONG_4202020 6) in elements
+# 2 (x|y) and 3 (z|w); the rest is zero. Then Permute(control[pack][shift],
+# vd, packed) overwrites the selected elements of vd and keeps the others:
+#
+#   pack 1: shift s writes packed.w into element 3 - s
+#   pack 2: s=0 -> z,w = packed.z,w; s=1 -> y,z; s=2 -> x,y; s=3 -> x = packed.w
+#   pack 3: as pack 2, except s=3 -> w = packed.z
+#
+# Float -> half is vcvtps2ph with round-toward-zero (x64_seq_vector.cc PACK
+# EmitFLOAT16_2 / EmitFLOAT16_4, imm8 = 3): truncated mantissa, finite
+# overflow -> 0x7BFF, inf -> 0x7C00, NaN quieted with its top 10 payload bits,
+# half denormals produced, float denormals -> signed zero.
+#
+# Words for Xenia's cases are its hand-coded .long values; the others come
+# from encode.py and the mnemonic guard checks them.
+
+# ---------------------------------------------------------------------------
+# Xenia src/xenia/cpu/ppc/testing/instr_vpkd3d128.s, transcribed
+# ---------------------------------------------------------------------------
+
+[[case]]
+name = "xenia_test_vpkd3d128_d3dcolor_invalid_0"
+mnemonic = "vpkd3d128"
+source = "xenia src/xenia/cpu/ppc/testing/instr_vpkd3d128.s test_vpkd3d128_d3dcolor_invalid_0; x64_seq_vector.cc PACK EmitD3DCOLOR (vmaxps 3.0, vminps 0x404000FF, low bytes as ARGB)"
+insns = [0x18811E10]   # vpkd3d128 v4,v3,0,1,0
+[case.in]
+v3 = { u32 = [0x00000001, 0x00000002, 0x00000003, 0x00000004] }
+v4 = { u32 = [0xCDCDCDCD, 0xCDCDCDCD, 0xCDCDCDCD, 0xCDCDCDCD] }
+[case.out]
+v3 = { u32 = [0x00000001, 0x00000002, 0x00000003, 0x00000004] }
+v4 = { u32 = [0xCDCDCDCD, 0xCDCDCDCD, 0xCDCDCDCD, 0x00000000] }
+
+[[case]]
+name = "xenia_test_vpkd3d128_d3dcolor_invalid_1"
+mnemonic = "vpkd3d128"
+source = "xenia instr_vpkd3d128.s test_vpkd3d128_d3dcolor_invalid_1; x64_seq_vector.cc PACK EmitD3DCOLOR (values above the sat constant clamp to 0xFF)"
+insns = [0x18811E10]   # vpkd3d128 v4,v3,0,1,0
+[case.in]
+v3 = { u32 = [0x40800000, 0x40000000, 0xC2F60000, 0x4B3BDF83] }
+v4 = { u32 = [0xCDCDCDCD, 0xCDCDCDCD, 0xCDCDCDCD, 0xCDCDCDCD] }
+[case.out]
+v3 = { u32 = [0x40800000, 0x40000000, 0xC2F60000, 0x4B3BDF83] }
+v4 = { u32 = [0xCDCDCDCD, 0xCDCDCDCD, 0xCDCDCDCD, 0xFFFF0000] }
+
+[[case]]
+name = "xenia_test_vpkd3d128_d3dcolor_invalid_2"
+mnemonic = "vpkd3d128"
+source = "xenia instr_vpkd3d128.s test_vpkd3d128_d3dcolor_invalid_2; x64_seq_vector.cc PACK EmitD3DCOLOR (vmaxps first so NaN packs as 0; 5454082B depends on it)"
+insns = [0x18811E10]   # vpkd3d128 v4,v3,0,1,0
+[case.in]
+v3 = { u32 = [0x40800000, 0x40000000, 0xC2F60000, 0xFFFFFFFF] }
+v4 = { u32 = [0xCDCDCDCD, 0xCDCDCDCD, 0xCDCDCDCD, 0xCDCDCDCD] }
+[case.out]
+v3 = { u32 = [0x40800000, 0x40000000, 0xC2F60000, 0xFFFFFFFF] }
+v4 = { u32 = [0xCDCDCDCD, 0xCDCDCDCD, 0xCDCDCDCD, 0x00FF0000] }
+
+[[case]]
+name = "xenia_test_vpkd3d128_d3dcolor_1_0"
+mnemonic = "vpkd3d128"
+source = "xenia instr_vpkd3d128.s test_vpkd3d128_d3dcolor_1_0; ppc_emit_altivec.cc InstrEmit_vpkd3d128 pack 1 shift 0 MakePermuteMask(0,0,0,1,0,2,1,3)"
+insns = [0x18811E10]   # vpkd3d128 v4,v3,0,1,0
+[case.in]
+v3 = { u32 = [0x40400001, 0x40400002, 0x40400003, 0x40400004] }
+v4 = { u32 = [0xCDCDCDCD, 0xCDCDCDCD, 0xCDCDCDCD, 0xCDCDCDCD] }
+[case.out]
+v3 = { u32 = [0x40400001, 0x40400002, 0x40400003, 0x40400004] }
+v4 = { u32 = [0xCDCDCDCD, 0xCDCDCDCD, 0xCDCDCDCD, 0x04010203] }
+
+[[case]]
+name = "xenia_test_vpkd3d128_d3dcolor_1_1"
+mnemonic = "vpkd3d128"
+source = "xenia instr_vpkd3d128.s test_vpkd3d128_d3dcolor_1_1; InstrEmit_vpkd3d128 pack 1 shift 1 MakePermuteMask(0,0,0,1,1,3,0,3)"
+insns = [0x18811E50]   # vpkd3d128 v4,v3,0,1,1
+[case.in]
+v3 = { u32 = [0x40400001, 0x40400002, 0x40400003, 0x40400004] }
+v4 = { u32 = [0xCDCDCDCD, 0xCDCDCDCD, 0xCDCDCDCD, 0xCDCDCDCD] }
+[case.out]
+v4 = { u32 = [0xCDCDCDCD, 0xCDCDCDCD, 0x04010203, 0xCDCDCDCD] }
+
+[[case]]
+name = "xenia_test_vpkd3d128_d3dcolor_1_2"
+mnemonic = "vpkd3d128"
+source = "xenia instr_vpkd3d128.s test_vpkd3d128_d3dcolor_1_2; InstrEmit_vpkd3d128 pack 1 shift 2 MakePermuteMask(0,0,1,3,0,2,0,3)"
+insns = [0x18811E90]   # vpkd3d128 v4,v3,0,1,2
+[case.in]
+v3 = { u32 = [0x40400001, 0x40400002, 0x40400003, 0x40400004] }
+v4 = { u32 = [0xCDCDCDCD, 0xCDCDCDCD, 0xCDCDCDCD, 0xCDCDCDCD] }
+[case.out]
+v4 = { u32 = [0xCDCDCDCD, 0x04010203, 0xCDCDCDCD, 0xCDCDCDCD] }
+
+[[case]]
+name = "xenia_test_vpkd3d128_d3dcolor_1_3"
+mnemonic = "vpkd3d128"
+source = "xenia instr_vpkd3d128.s test_vpkd3d128_d3dcolor_1_3; InstrEmit_vpkd3d128 pack 1 shift 3 MakePermuteMask(1,3,0,1,0,2,0,3)"
+insns = [0x18811ED0]   # vpkd3d128 v4,v3,0,1,3
+[case.in]
+v3 = { u32 = [0x40400001, 0x40400002, 0x40400003, 0x40400004] }
+v4 = { u32 = [0xCDCDCDCD, 0xCDCDCDCD, 0xCDCDCDCD, 0xCDCDCDCD] }
+[case.out]
+v4 = { u32 = [0x04010203, 0xCDCDCDCD, 0xCDCDCDCD, 0xCDCDCDCD] }
+
+[[case]]
+name = "xenia_test_vpkd3d128_d3dcolor_2_0"
+mnemonic = "vpkd3d128"
+source = "xenia instr_vpkd3d128.s test_vpkd3d128_d3dcolor_2_0; InstrEmit_vpkd3d128 pack 2 shift 0 MakePermuteMask(0,0,0,1,1,2,1,3) (z takes the zero element of a 32-bit pack)"
+insns = [0x18821E10]   # vpkd3d128 v4,v3,0,2,0
+[case.in]
+v3 = { u32 = [0x40400001, 0x40400002, 0x40400003, 0x40400004] }
+v4 = { u32 = [0xCDCDCDCD, 0xCDCDCDCD, 0xCDCDCDCD, 0xCDCDCDCD] }
+[case.out]
+v4 = { u32 = [0xCDCDCDCD, 0xCDCDCDCD, 0x00000000, 0x04010203] }
+
+[[case]]
+name = "xenia_test_vpkd3d128_d3dcolor_2_1"
+mnemonic = "vpkd3d128"
+source = "xenia instr_vpkd3d128.s test_vpkd3d128_d3dcolor_2_1; InstrEmit_vpkd3d128 pack 2 shift 1 MakePermuteMask(0,0,1,2,1,3,0,3)"
+insns = [0x18821E50]   # vpkd3d128 v4,v3,0,2,1
+[case.in]
+v3 = { u32 = [0x40400001, 0x40400002, 0x40400003, 0x40400004] }
+v4 = { u32 = [0xCDCDCDCD, 0xCDCDCDCD, 0xCDCDCDCD, 0xCDCDCDCD] }
+[case.out]
+v4 = { u32 = [0xCDCDCDCD, 0x00000000, 0x04010203, 0xCDCDCDCD] }
+
+[[case]]
+name = "xenia_test_vpkd3d128_d3dcolor_2_2"
+mnemonic = "vpkd3d128"
+source = "xenia instr_vpkd3d128.s test_vpkd3d128_d3dcolor_2_2; InstrEmit_vpkd3d128 pack 2 shift 2 MakePermuteMask(1,2,1,3,0,2,0,3)"
+insns = [0x18821E90]   # vpkd3d128 v4,v3,0,2,2
+[case.in]
+v3 = { u32 = [0x40400001, 0x40400002, 0x40400003, 0x40400004] }
+v4 = { u32 = [0xCDCDCDCD, 0xCDCDCDCD, 0xCDCDCDCD, 0xCDCDCDCD] }
+[case.out]
+v4 = { u32 = [0x00000000, 0x04010203, 0xCDCDCDCD, 0xCDCDCDCD] }
+
+[[case]]
+name = "xenia_test_vpkd3d128_d3dcolor_2_3"
+mnemonic = "vpkd3d128"
+source = "xenia instr_vpkd3d128.s test_vpkd3d128_d3dcolor_2_3; InstrEmit_vpkd3d128 pack 2 shift 3 MakePermuteMask(1,3,0,1,0,2,0,3) (only one word)"
+insns = [0x18821ED0]   # vpkd3d128 v4,v3,0,2,3
+[case.in]
+v3 = { u32 = [0x40400001, 0x40400002, 0x40400003, 0x40400004] }
+v4 = { u32 = [0xCDCDCDCD, 0xCDCDCDCD, 0xCDCDCDCD, 0xCDCDCDCD] }
+[case.out]
+v4 = { u32 = [0x04010203, 0xCDCDCDCD, 0xCDCDCDCD, 0xCDCDCDCD] }
+
+[[case]]
+name = "xenia_test_vpkd3d128_d3dcolor_3_0"
+mnemonic = "vpkd3d128"
+source = "xenia instr_vpkd3d128.s test_vpkd3d128_d3dcolor_3_0; InstrEmit_vpkd3d128 pack 3 shift 0 MakePermuteMask(0,0,0,1,1,2,1,3)"
+insns = [0x18831E10]   # vpkd3d128 v4,v3,0,3,0
+[case.in]
+v3 = { u32 = [0x40400001, 0x40400002, 0x40400003, 0x40400004] }
+v4 = { u32 = [0xCDCDCDCD, 0xCDCDCDCD, 0xCDCDCDCD, 0xCDCDCDCD] }
+[case.out]
+v4 = { u32 = [0xCDCDCDCD, 0xCDCDCDCD, 0x00000000, 0x04010203] }
+
+[[case]]
+name = "xenia_test_vpkd3d128_d3dcolor_3_1"
+mnemonic = "vpkd3d128"
+source = "xenia instr_vpkd3d128.s test_vpkd3d128_d3dcolor_3_1; InstrEmit_vpkd3d128 pack 3 shift 1 MakePermuteMask(0,0,1,2,1,3,0,3)"
+insns = [0x18831E50]   # vpkd3d128 v4,v3,0,3,1
+[case.in]
+v3 = { u32 = [0x40400001, 0x40400002, 0x40400003, 0x40400004] }
+v4 = { u32 = [0xCDCDCDCD, 0xCDCDCDCD, 0xCDCDCDCD, 0xCDCDCDCD] }
+[case.out]
+v4 = { u32 = [0xCDCDCDCD, 0x00000000, 0x04010203, 0xCDCDCDCD] }
+
+[[case]]
+name = "xenia_test_vpkd3d128_d3dcolor_3_2"
+mnemonic = "vpkd3d128"
+source = "xenia instr_vpkd3d128.s test_vpkd3d128_d3dcolor_3_2; InstrEmit_vpkd3d128 pack 3 shift 2 MakePermuteMask(1,2,1,3,0,2,0,3)"
+insns = [0x18831E90]   # vpkd3d128 v4,v3,0,3,2
+[case.in]
+v3 = { u32 = [0x40400001, 0x40400002, 0x40400003, 0x40400004] }
+v4 = { u32 = [0xCDCDCDCD, 0xCDCDCDCD, 0xCDCDCDCD, 0xCDCDCDCD] }
+[case.out]
+v4 = { u32 = [0x00000000, 0x04010203, 0xCDCDCDCD, 0xCDCDCDCD] }
+
+[[case]]
+name = "xenia_test_vpkd3d128_d3dcolor_3_3"
+mnemonic = "vpkd3d128"
+source = "xenia instr_vpkd3d128.s test_vpkd3d128_d3dcolor_3_3; InstrEmit_vpkd3d128 pack 3 shift 3 MakePermuteMask(0,0,0,1,0,2,1,2) (w takes packed.z, which is zero for a 32-bit pack)"
+insns = [0x18831ED0]   # vpkd3d128 v4,v3,0,3,3
+[case.in]
+v3 = { u32 = [0x40400001, 0x40400002, 0x40400003, 0x40400004] }
+v4 = { u32 = [0xCDCDCDCD, 0xCDCDCDCD, 0xCDCDCDCD, 0xCDCDCDCD] }
+[case.out]
+v4 = { u32 = [0xCDCDCDCD, 0xCDCDCDCD, 0xCDCDCDCD, 0x00000000] }
+
+[[case]]
+name = "xenia_test_vpkd3d128_short2_invalid_0"
+mnemonic = "vpkd3d128"
+source = "xenia instr_vpkd3d128.s test_vpkd3d128_short2_invalid_0; x64_seq_vector.cc PACK EmitSHORT_2 (vmaxps 0x403F8001, vminps 0x40407FFF, low 16 bits)"
+insns = [0x18851E10]   # vpkd3d128 v4,v3,1,1,0
+[case.in]
+v3 = { u32 = [0x43817E00, 0xC37CFC00, 0x42A23EC8, 0x403DB757] }
+v4 = { u32 = [0xCDCDCDCD, 0xCDCDCDCD, 0xCDCDCDCD, 0xCDCDCDCD] }
+[case.out]
+v3 = { u32 = [0x43817E00, 0xC37CFC00, 0x42A23EC8, 0x403DB757] }
+v4 = { u32 = [0xCDCDCDCD, 0xCDCDCDCD, 0xCDCDCDCD, 0x7FFF8001] }
+
+[[case]]
+name = "xenia_test_vpkd3d128_short2_invalid_1"
+mnemonic = "vpkd3d128"
+source = "xenia instr_vpkd3d128.s test_vpkd3d128_short2_invalid_1; x64_seq_vector.cc PACK EmitSHORT_2"
+insns = [0x18851E10]   # vpkd3d128 v4,v3,1,1,0
+[case.in]
+v3 = { u32 = [0x412FDF00, 0xC09FBE00, 0x42A23EC8, 0x403DB757] }
+v4 = { u32 = [0xCDCDCDCD, 0xCDCDCDCD, 0xCDCDCDCD, 0xCDCDCDCD] }
+[case.out]
+v4 = { u32 = [0xCDCDCDCD, 0xCDCDCDCD, 0xCDCDCDCD, 0x7FFF8001] }
+
+[[case]]
+name = "xenia_test_vpkd3d128_short2_0"
+mnemonic = "vpkd3d128"
+source = "xenia instr_vpkd3d128.s test_vpkd3d128_short2_0; x64_seq_vector.cc PACK EmitSHORT_2"
+insns = [0x18851E10]   # vpkd3d128 v4,v3,1,1,0
+[case.in]
+v3 = { u32 = [0x40407FFF, 0x403F8001, 0x00000000, 0x00000000] }
+v4 = { u32 = [0xCDCDCDCD, 0xCDCDCDCD, 0xCDCDCDCD, 0xCDCDCDCD] }
+[case.out]
+v4 = { u32 = [0xCDCDCDCD, 0xCDCDCDCD, 0xCDCDCDCD, 0x7FFF8001] }
+
+[[case]]
+name = "xenia_test_vpkd3d128_short2_1"
+mnemonic = "vpkd3d128"
+source = "xenia instr_vpkd3d128.s test_vpkd3d128_short2_1; x64_seq_vector.cc PACK EmitSHORT_2"
+insns = [0x18851E10]   # vpkd3d128 v4,v3,1,1,0
+[case.in]
+v3 = { u32 = [0x40404000, 0x403FC000, 0x40400003, 0x403F8001] }
+v4 = { u32 = [0xCDCDCDCD, 0xCDCDCDCD, 0xCDCDCDCD, 0xCDCDCDCD] }
+[case.out]
+v4 = { u32 = [0xCDCDCDCD, 0xCDCDCDCD, 0xCDCDCDCD, 0x4000C000] }
+
+[[case]]
+name = "xenia_test_vpkd3d128_short2_2"
+mnemonic = "vpkd3d128"
+source = "xenia instr_vpkd3d128.s test_vpkd3d128_short2_2; x64_seq_vector.cc PACK EmitSHORT_2"
+insns = [0x18851E10]   # vpkd3d128 v4,v3,1,1,0
+[case.in]
+v3 = { u32 = [0x4040FFFE, 0x403FF333, 0x42A23EC8, 0x403DB757] }
+v4 = { u32 = [0xCDCDCDCD, 0xCDCDCDCD, 0xCDCDCDCD, 0xCDCDCDCD] }
+[case.out]
+v4 = { u32 = [0xCDCDCDCD, 0xCDCDCDCD, 0xCDCDCDCD, 0x7FFFF333] }
+
+[[case]]
+name = "xenia_test_vpkd3d128_short4_0"
+mnemonic = "vpkd3d128"
+source = "xenia instr_vpkd3d128.s test_vpkd3d128_short4_0; x64_seq_vector.cc PACK EmitSHORT_4 (z = x:y, w = z:w)"
+insns = [0x18921E10]   # vpkd3d128 v4,v3,4,2,0
+[case.in]
+v3 = { u32 = [0x403F8001, 0x403FFFF8, 0x4040007F, 0x40400000] }
+v4 = { u32 = [0xCDCDCDCD, 0xCDCDCDCD, 0xCDCDCDCD, 0xCDCDCDCD] }
+[case.out]
+v3 = { u32 = [0x403F8001, 0x403FFFF8, 0x4040007F, 0x40400000] }
+v4 = { u32 = [0xCDCDCDCD, 0xCDCDCDCD, 0x8001FFF8, 0x007F0000] }
+
+[[case]]
+name = "xenia_test_vpkd3d128_uint_2101010_0"
+mnemonic = "vpkd3d128"
+source = "xenia instr_vpkd3d128.s test_vpkd3d128_uint_2101010_0; x64_seq_vector.cc PACK EmitUINT_2101010 (xyz saturate to 10-bit signed, w to 2-bit, shifted 0/10/20/30)"
+insns = [0x18891E10]   # vpkd3d128 v4,v3,2,1,0
+[case.in]
+v3 = { u32 = [0xB8FF8000, 0xB8FF8000, 0xC04001FF, 0x4E9A5A5A] }
+v4 = { u32 = [0xCDCDCDCD, 0xCDCDCDCD, 0xCDCDCDCD, 0xCDCDCDCD] }
+[case.out]
+v3 = { u32 = [0xB8FF8000, 0xB8FF8000, 0xC04001FF, 0x4E9A5A5A] }
+v4 = { u32 = [0xCDCDCDCD, 0xCDCDCDCD, 0xCDCDCDCD, 0xE0180601] }
+
+[[case]]
+name = "xenia_test_vpkd3d128_uint_2101010_1"
+mnemonic = "vpkd3d128"
+source = "xenia instr_vpkd3d128.s test_vpkd3d128_uint_2101010_1; x64_seq_vector.cc PACK EmitUINT_2101010"
+insns = [0x18891E10]   # vpkd3d128 v4,v3,2,1,0
+[case.in]
+v3 = { u32 = [0x42C80000, 0xC2C80000, 0x40400000, 0x3F800000] }
+v4 = { u32 = [0xCDCDCDCD, 0xCDCDCDCD, 0xCDCDCDCD, 0xCDCDCDCD] }
+[case.out]
+v4 = { u32 = [0xCDCDCDCD, 0xCDCDCDCD, 0xCDCDCDCD, 0x000805FF] }
+
+[[case]]
+name = "xenia_test_vpkd3d128_uint_2101010_2"
+mnemonic = "vpkd3d128"
+source = "xenia instr_vpkd3d128.s test_vpkd3d128_uint_2101010_2; x64_seq_vector.cc PACK EmitUINT_2101010"
+insns = [0x18891E10]   # vpkd3d128 v4,v3,2,1,0
+[case.in]
+v3 = { u32 = [0x3F000000, 0xBF000000, 0x3F800000, 0x00000000] }
+v4 = { u32 = [0xCDCDCDCD, 0xCDCDCDCD, 0xCDCDCDCD, 0xCDCDCDCD] }
+[case.out]
+v4 = { u32 = [0xCDCDCDCD, 0xCDCDCDCD, 0xCDCDCDCD, 0x20180601] }
+
+[[case]]
+name = "xenia_test_vpkd3d128_float16_2_invalid_0"
+mnemonic = "vpkd3d128"
+source = "xenia instr_vpkd3d128.s test_vpkd3d128_float16_2_invalid_0; x64_seq_vector.cc PACK EmitFLOAT16_2 (vcvtps2ph imm8 3, w = half(x):half(y))"
+insns = [0x188D1E10]   # vpkd3d128 v4,v3,3,1,0
+[case.in]
+v3 = { u32 = [0x3FC00000, 0xBFC00000, 0x42A23EC8, 0x403DB757] }
+v4 = { u32 = [0xCDCDCDCD, 0xCDCDCDCD, 0xCDCDCDCD, 0xCDCDCDCD] }
+[case.out]
+v3 = { u32 = [0x3FC00000, 0xBFC00000, 0x42A23EC8, 0x403DB757] }
+v4 = { u32 = [0xCDCDCDCD, 0xCDCDCDCD, 0xCDCDCDCD, 0x3E00BE00] }
+
+[[case]]
+name = "xenia_test_vpkd3d128_float16_2_0"
+mnemonic = "vpkd3d128"
+source = "xenia instr_vpkd3d128.s test_vpkd3d128_float16_2_0; x64_seq_vector.cc PACK EmitFLOAT16_2"
+insns = [0x188D1E10]   # vpkd3d128 v4,v3,3,1,0
+[case.in]
+v3 = { u32 = [0x3F000000, 0xBF000000, 0x00000000, 0x00000000] }
+v4 = { u32 = [0xCDCDCDCD, 0xCDCDCDCD, 0xCDCDCDCD, 0xCDCDCDCD] }
+[case.out]
+v4 = { u32 = [0xCDCDCDCD, 0xCDCDCDCD, 0xCDCDCDCD, 0x3800B800] }
+
+[[case]]
+name = "xenia_test_vpkd3d128_float16_4_invalid_0"
+mnemonic = "vpkd3d128"
+source = "xenia instr_vpkd3d128.s test_vpkd3d128_float16_4_invalid_0; x64_seq_vector.cc PACK EmitFLOAT16_4 (z = half(x):half(y), w = half(z):half(w))"
+insns = [0x18961E10]   # vpkd3d128 v4,v3,5,2,0
+[case.in]
+v3 = { u32 = [0x3FC00000, 0xBFC00000, 0x3FC00000, 0xBFC00000] }
+v4 = { u32 = [0xCDCDCDCD, 0xCDCDCDCD, 0xCDCDCDCD, 0xCDCDCDCD] }
+[case.out]
+v3 = { u32 = [0x3FC00000, 0xBFC00000, 0x3FC00000, 0xBFC00000] }
+v4 = { u32 = [0xCDCDCDCD, 0xCDCDCDCD, 0x3E00BE00, 0x3E00BE00] }
+
+[[case]]
+name = "xenia_test_vpkd3d128_float16_4_0"
+mnemonic = "vpkd3d128"
+source = "xenia instr_vpkd3d128.s test_vpkd3d128_float16_4_0; x64_seq_vector.cc PACK EmitFLOAT16_4"
+insns = [0x18961E10]   # vpkd3d128 v4,v3,5,2,0
+[case.in]
+v3 = { u32 = [0x3F000000, 0xBF000000, 0x3F800000, 0xBF800000] }
+v4 = { u32 = [0xCDCDCDCD, 0xCDCDCDCD, 0xCDCDCDCD, 0xCDCDCDCD] }
+[case.out]
+v4 = { u32 = [0xCDCDCDCD, 0xCDCDCDCD, 0x3800B800, 0x3C00BC00] }
+
+# ---------------------------------------------------------------------------
+# The game's form: vpkd3d128 vD,vB,3,1,3 (FLOAT16_2, pack 1, shift 3), on the
+# register pairs Halo Wars uses. vD starts nonzero: only element 0 may change.
+# ---------------------------------------------------------------------------
+
+[[case]]
+name = "game_float16_2_1_3_v63_v47"
+mnemonic = "vpkd3d128"
+source = "xenia InstrEmit_vpkd3d128 type 3 pack 1 shift 3 MakePermuteMask(1,3,0,1,0,2,0,3) + PACK EmitFLOAT16_2; VX128_4 VD128/VB128 split fields (ppc_instr.h)"
+insns = [0x1BED7ED5]   # vpkd3d128 v63,v47,3,1,3
+[case.in]
+v47 = { f32 = [1.0, -2.0, 3.0, 4.0] }
+v63 = { u32 = [0x11111111, 0x22222222, 0x33333333, 0x44444444] }
+[case.out]
+v47 = { f32 = [1.0, -2.0, 3.0, 4.0] }
+v63 = { u32 = [0x3C00C000, 0x22222222, 0x33333333, 0x44444444] }
+
+[[case]]
+name = "game_float16_2_1_3_v32_v43_overflow_saturates"
+mnemonic = "vpkd3d128"
+source = "xenia PACK EmitFLOAT16_2 vcvtps2ph round-toward-zero: 65504 -> 0x7BFF, 65520 -> 0x7BFF (nearest would give inf); half.hpp float2half<round_toward_zero> agrees"
+insns = [0x180D5ED5]   # vpkd3d128 v32,v43,3,1,3
+[case.in]
+v43 = { u32 = [0x477FE000, 0x477FF000, 0x7F800000, 0x7FC00000] }
+v32 = { u32 = [0xDEADBEEF, 0x0BADF00D, 0xCAFEBABE, 0x12345678] }
+[case.out]
+v43 = { u32 = [0x477FE000, 0x477FF000, 0x7F800000, 0x7FC00000] }
+v32 = { u32 = [0x7BFF7BFF, 0x0BADF00D, 0xCAFEBABE, 0x12345678] }
+
+[[case]]
+name = "game_float16_2_1_3_v58_v62_signed_zero_and_denormal"
+mnemonic = "vpkd3d128"
+source = "xenia PACK EmitFLOAT16_2 vcvtps2ph: -0.0 -> 0x8000, 2^-15 -> half denormal 0x0200"
+insns = [0x1B4DF6D5]   # vpkd3d128 v58,v62,3,1,3
+[case.in]
+v62 = { u32 = [0x80000000, 0x38000000, 0x00000001, 0x00000002] }
+v58 = { u32 = [0xA5A5A5A5, 0xA5A5A5A5, 0xA5A5A5A5, 0xA5A5A5A5] }
+[case.out]
+v58 = { u32 = [0x80000200, 0xA5A5A5A5, 0xA5A5A5A5, 0xA5A5A5A5] }
+
+[[case]]
+name = "game_float16_2_1_3_v49_v53_infinities"
+mnemonic = "vpkd3d128"
+source = "xenia PACK EmitFLOAT16_2 vcvtps2ph: +inf -> 0x7C00, -inf -> 0xFC00"
+insns = [0x1A2DAED5]   # vpkd3d128 v49,v53,3,1,3
+[case.in]
+v53 = { u32 = [0x7F800000, 0xFF800000, 0x3F800000, 0x3F800000] }
+v49 = { u32 = [0x00000001, 0x00000002, 0x00000003, 0x00000004] }
+[case.out]
+v49 = { u32 = [0x7C00FC00, 0x00000002, 0x00000003, 0x00000004] }
+
+[[case]]
+name = "game_float16_2_1_3_v40_v44_truncates_and_negative_overflow"
+mnemonic = "vpkd3d128"
+source = "xenia PACK EmitFLOAT16_2 vcvtps2ph round-toward-zero: 0x3F803FFF (1 + 1.99 half ulps) -> 0x3C01 (nearest would give 0x3C02), -1e6 -> 0xFBFF"
+insns = [0x190D66D5]   # vpkd3d128 v40,v44,3,1,3
+[case.in]
+v44 = { u32 = [0x3F803FFF, 0xC9742400, 0x00000000, 0x00000000] }
+v40 = { u32 = [0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF] }
+[case.out]
+v40 = { u32 = [0x3C01FBFF, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF] }
+
+[[case]]
+name = "float16_2_1_3_same_register"
+mnemonic = "vpkd3d128"
+source = "xenia InstrEmit_vpkd3d128 pack 1 shift 3 with vd == vb: packed from the old value, y z w preserved"
+insns = [0x186D1ED0]   # vpkd3d128 v3,v3,3,1,3
+[case.in]
+v3 = { u32 = [0x3F800000, 0xC0000000, 0x40400000, 0x40800000] }
+[case.out]
+v3 = { u32 = [0x3C00C000, 0xC0000000, 0x40400000, 0x40800000] }
+
+# ---------------------------------------------------------------------------
+# FLOAT16_2 conversion edge cases (pack 1 shift 0, Xenia's word)
+# ---------------------------------------------------------------------------
+
+[[case]]
+name = "float16_2_quiet_nans_keep_sign"
+mnemonic = "vpkd3d128"
+source = "xenia PACK EmitFLOAT16_2 vcvtps2ph: 0x7FC00000 -> 0x7E00, 0xFFC00000 -> 0xFE00 (half.hpp fallback agrees)"
+insns = [0x188D1E10]   # vpkd3d128 v4,v3,3,1,0
+[case.in]
+v3 = { u32 = [0x7FC00000, 0xFFC00000, 0x00000000, 0x00000000] }
+v4 = { u32 = [0xCDCDCDCD, 0xCDCDCDCD, 0xCDCDCDCD, 0xCDCDCDCD] }
+[case.out]
+v4 = { u32 = [0xCDCDCDCD, 0xCDCDCDCD, 0xCDCDCDCD, 0x7E00FE00] }
+
+[[case]]
+name = "float16_2_signalling_nan_quieted_payload_truncated"
+mnemonic = "vpkd3d128"
+source = "xenia PACK EmitFLOAT16_2 vcvtps2ph: sNaN 0x7F812345 -> quiet bit set, top 10 payload bits kept -> 0x7E09; 0x7FFFFFFF -> 0x7FFF"
+insns = [0x188D1E10]   # vpkd3d128 v4,v3,3,1,0
+[case.in]
+v3 = { u32 = [0x7F812345, 0x7FFFFFFF, 0x00000000, 0x00000000] }
+v4 = { u32 = [0xCDCDCDCD, 0xCDCDCDCD, 0xCDCDCDCD, 0xCDCDCDCD] }
+[case.out]
+v4 = { u32 = [0xCDCDCDCD, 0xCDCDCDCD, 0xCDCDCDCD, 0x7E097FFF] }
+
+[[case]]
+name = "float16_2_half_denormal_boundaries"
+mnemonic = "vpkd3d128"
+source = "xenia PACK EmitFLOAT16_2 vcvtps2ph round-toward-zero: 2^-24 -> 0x0001, just under 2^-24 -> 0"
+insns = [0x188D1E10]   # vpkd3d128 v4,v3,3,1,0
+[case.in]
+v3 = { u32 = [0x33800000, 0x337FFFFF, 0x00000000, 0x00000000] }
+v4 = { u32 = [0xCDCDCDCD, 0xCDCDCDCD, 0xCDCDCDCD, 0xCDCDCDCD] }
+[case.out]
+v4 = { u32 = [0xCDCDCDCD, 0xCDCDCDCD, 0xCDCDCDCD, 0x00010000] }
+
+[[case]]
+name = "float16_2_largest_half_denormal_and_float_denormal"
+mnemonic = "vpkd3d128"
+source = "xenia PACK EmitFLOAT16_2 vcvtps2ph round-toward-zero: 0x387FFFFF -> 0x03FF (no round up to 0x0400), float denormal 0x00000001 -> 0"
+insns = [0x188D1E10]   # vpkd3d128 v4,v3,3,1,0
+[case.in]
+v3 = { u32 = [0x387FFFFF, 0x00000001, 0x00000000, 0x00000000] }
+v4 = { u32 = [0xCDCDCDCD, 0xCDCDCDCD, 0xCDCDCDCD, 0xCDCDCDCD] }
+[case.out]
+v4 = { u32 = [0xCDCDCDCD, 0xCDCDCDCD, 0xCDCDCDCD, 0x03FF0000] }
+
+[[case]]
+name = "float16_2_negative_float_denormal_and_smallest_half_normal"
+mnemonic = "vpkd3d128"
+source = "xenia PACK EmitFLOAT16_2 vcvtps2ph: -denormal -> 0x8000, 2^-14 -> 0x0400"
+insns = [0x188D1E10]   # vpkd3d128 v4,v3,3,1,0
+[case.in]
+v3 = { u32 = [0x80000001, 0x38800000, 0x00000000, 0x00000000] }
+v4 = { u32 = [0xCDCDCDCD, 0xCDCDCDCD, 0xCDCDCDCD, 0xCDCDCDCD] }
+[case.out]
+v4 = { u32 = [0xCDCDCDCD, 0xCDCDCDCD, 0xCDCDCDCD, 0x80000400] }
+
+[[case]]
+name = "float16_2_rounds_toward_zero"
+mnemonic = "vpkd3d128"
+source = "xenia PACK EmitFLOAT16_2 vcvtps2ph imm8 3 (round toward zero): 0x3F802000 and 0x3F803FFF both -> 0x3C01"
+insns = [0x188D1E10]   # vpkd3d128 v4,v3,3,1,0
+[case.in]
+v3 = { u32 = [0x3F802000, 0x3F803FFF, 0x00000000, 0x00000000] }
+v4 = { u32 = [0xCDCDCDCD, 0xCDCDCDCD, 0xCDCDCDCD, 0xCDCDCDCD] }
+[case.out]
+v4 = { u32 = [0xCDCDCDCD, 0xCDCDCDCD, 0xCDCDCDCD, 0x3C013C01] }
+
+[[case]]
+name = "float16_2_overflow_saturates_both_signs"
+mnemonic = "vpkd3d128"
+source = "xenia PACK EmitFLOAT16_2 vcvtps2ph round-toward-zero: 65536 -> 0x7BFF, -FLT_MAX -> 0xFBFF"
+insns = [0x188D1E10]   # vpkd3d128 v4,v3,3,1,0
+[case.in]
+v3 = { u32 = [0x47800000, 0xFF7FFFFF, 0x00000000, 0x00000000] }
+v4 = { u32 = [0xCDCDCDCD, 0xCDCDCDCD, 0xCDCDCDCD, 0xCDCDCDCD] }
+[case.out]
+v4 = { u32 = [0xCDCDCDCD, 0xCDCDCDCD, 0xCDCDCDCD, 0x7BFFFBFF] }
+
+# ---------------------------------------------------------------------------
+# FLOAT16_2 with the other pack/shift combinations
+# ---------------------------------------------------------------------------
+
+[[case]]
+name = "float16_2_1_1"
+mnemonic = "vpkd3d128"
+source = "xenia InstrEmit_vpkd3d128 pack 1 shift 1 MakePermuteMask(0,0,0,1,1,3,0,3) + PACK EmitFLOAT16_2"
+insns = [0x188D1E50]   # vpkd3d128 v4,v3,3,1,1
+[case.in]
+v3 = { u32 = [0x3F000000, 0xBF000000, 0x00000000, 0x00000000] }
+v4 = { u32 = [0xCDCDCDCD, 0xCDCDCDCD, 0xCDCDCDCD, 0xCDCDCDCD] }
+[case.out]
+v4 = { u32 = [0xCDCDCDCD, 0xCDCDCDCD, 0x3800B800, 0xCDCDCDCD] }
+
+[[case]]
+name = "float16_2_1_2"
+mnemonic = "vpkd3d128"
+source = "xenia InstrEmit_vpkd3d128 pack 1 shift 2 MakePermuteMask(0,0,1,3,0,2,0,3) + PACK EmitFLOAT16_2"
+insns = [0x188D1E90]   # vpkd3d128 v4,v3,3,1,2
+[case.in]
+v3 = { u32 = [0x3F000000, 0xBF000000, 0x00000000, 0x00000000] }
+v4 = { u32 = [0xCDCDCDCD, 0xCDCDCDCD, 0xCDCDCDCD, 0xCDCDCDCD] }
+[case.out]
+v4 = { u32 = [0xCDCDCDCD, 0x3800B800, 0xCDCDCDCD, 0xCDCDCDCD] }
+
+[[case]]
+name = "float16_2_2_0_zero_fills_z"
+mnemonic = "vpkd3d128"
+source = "xenia InstrEmit_vpkd3d128 pack 2 shift 0 MakePermuteMask(0,0,0,1,1,2,1,3): z takes the zero element of the 32-bit pack (PACK EmitFLOAT16_2 vpshufb XMMPackFLOAT16_2 zeroes lanes 0..2)"
+insns = [0x188E1E10]   # vpkd3d128 v4,v3,3,2,0
+[case.in]
+v3 = { u32 = [0x3F000000, 0xBF000000, 0x3F800000, 0xBF800000] }
+v4 = { u32 = [0xCDCDCDCD, 0xCDCDCDCD, 0xCDCDCDCD, 0xCDCDCDCD] }
+[case.out]
+v4 = { u32 = [0xCDCDCDCD, 0xCDCDCDCD, 0x00000000, 0x3800B800] }
+
+[[case]]
+name = "float16_2_3_3_zero_fills_w"
+mnemonic = "vpkd3d128"
+source = "xenia InstrEmit_vpkd3d128 pack 3 shift 3 MakePermuteMask(0,0,0,1,0,2,1,2): w takes packed.z, zero for a 32-bit pack"
+insns = [0x188F1ED0]   # vpkd3d128 v4,v3,3,3,3
+[case.in]
+v3 = { u32 = [0x3F000000, 0xBF000000, 0x3F800000, 0xBF800000] }
+v4 = { u32 = [0xCDCDCDCD, 0xCDCDCDCD, 0xCDCDCDCD, 0xCDCDCDCD] }
+[case.out]
+v4 = { u32 = [0xCDCDCDCD, 0xCDCDCDCD, 0xCDCDCDCD, 0x00000000] }
+
+# pack 0 is not a valid form: Xenia's InstrEmit_vpkd3d128 hits
+# assert_unhandled_case(pack) and XenonRecomp emits a trap. Kept as xfail so
+# the trap stays visible rather than silently doing something.
+[[case]]
+name = "float16_2_pack_0_is_rejected"
+mnemonic = "vpkd3d128"
+xfail = true
+source = "xenia InstrEmit_vpkd3d128 default: assert_unhandled_case(pack) for pack 0 (instr_vpkd3d128.s: mask must not be zero)"
+insns = [0x188C1E10]   # vpkd3d128 v4,v3,3,0,0
+[case.in]
+v3 = { u32 = [0x3F000000, 0xBF000000, 0x00000000, 0x00000000] }
+v4 = { u32 = [0xCDCDCDCD, 0xCDCDCDCD, 0xCDCDCDCD, 0xCDCDCDCD] }
+[case.out]
+v4 = { u32 = [0xCDCDCDCD, 0xCDCDCDCD, 0xCDCDCDCD, 0xCDCDCDCD] }
+
+# ---------------------------------------------------------------------------
+# FLOAT16_4: every pack/shift the 64-bit permute table distinguishes, plus the
+# conversion specials (which the old XenonRecomp code mapped to 0x7FFF)
+# ---------------------------------------------------------------------------
+
+[[case]]
+name = "float16_4_2_1"
+mnemonic = "vpkd3d128"
+source = "xenia InstrEmit_vpkd3d128 pack 2 shift 1 MakePermuteMask(0,0,1,2,1,3,0,3) + PACK EmitFLOAT16_4 (test_vpkd3d128_float16_4_0 input)"
+insns = [0x18961E50]   # vpkd3d128 v4,v3,5,2,1
+[case.in]
+v3 = { u32 = [0x3F000000, 0xBF000000, 0x3F800000, 0xBF800000] }
+v4 = { u32 = [0xCDCDCDCD, 0xCDCDCDCD, 0xCDCDCDCD, 0xCDCDCDCD] }
+[case.out]
+v4 = { u32 = [0xCDCDCDCD, 0x3800B800, 0x3C00BC00, 0xCDCDCDCD] }
+
+[[case]]
+name = "float16_4_2_2"
+mnemonic = "vpkd3d128"
+source = "xenia InstrEmit_vpkd3d128 pack 2 shift 2 MakePermuteMask(1,2,1,3,0,2,0,3) + PACK EmitFLOAT16_4"
+insns = [0x18961E90]   # vpkd3d128 v4,v3,5,2,2
+[case.in]
+v3 = { u32 = [0x3F000000, 0xBF000000, 0x3F800000, 0xBF800000] }
+v4 = { u32 = [0xCDCDCDCD, 0xCDCDCDCD, 0xCDCDCDCD, 0xCDCDCDCD] }
+[case.out]
+v4 = { u32 = [0x3800B800, 0x3C00BC00, 0xCDCDCDCD, 0xCDCDCDCD] }
+
+[[case]]
+name = "float16_4_2_3_only_zw_word"
+mnemonic = "vpkd3d128"
+source = "xenia InstrEmit_vpkd3d128 pack 2 shift 3 MakePermuteMask(1,3,0,1,0,2,0,3): x = packed.w only"
+insns = [0x18961ED0]   # vpkd3d128 v4,v3,5,2,3
+[case.in]
+v3 = { u32 = [0x3F000000, 0xBF000000, 0x3F800000, 0xBF800000] }
+v4 = { u32 = [0xCDCDCDCD, 0xCDCDCDCD, 0xCDCDCDCD, 0xCDCDCDCD] }
+[case.out]
+v4 = { u32 = [0x3C00BC00, 0xCDCDCDCD, 0xCDCDCDCD, 0xCDCDCDCD] }
+
+[[case]]
+name = "float16_4_1_3"
+mnemonic = "vpkd3d128"
+source = "xenia InstrEmit_vpkd3d128 pack 1 shift 3 MakePermuteMask(1,3,0,1,0,2,0,3) + PACK EmitFLOAT16_4"
+insns = [0x18951ED0]   # vpkd3d128 v4,v3,5,1,3
+[case.in]
+v3 = { u32 = [0x3F000000, 0xBF000000, 0x3F800000, 0xBF800000] }
+v4 = { u32 = [0xCDCDCDCD, 0xCDCDCDCD, 0xCDCDCDCD, 0xCDCDCDCD] }
+[case.out]
+v4 = { u32 = [0x3C00BC00, 0xCDCDCDCD, 0xCDCDCDCD, 0xCDCDCDCD] }
+
+[[case]]
+name = "float16_4_1_0"
+mnemonic = "vpkd3d128"
+source = "xenia InstrEmit_vpkd3d128 pack 1 shift 0 MakePermuteMask(0,0,0,1,0,2,1,3) + PACK EmitFLOAT16_4"
+insns = [0x18951E10]   # vpkd3d128 v4,v3,5,1,0
+[case.in]
+v3 = { u32 = [0x3F000000, 0xBF000000, 0x3F800000, 0xBF800000] }
+v4 = { u32 = [0xCDCDCDCD, 0xCDCDCDCD, 0xCDCDCDCD, 0xCDCDCDCD] }
+[case.out]
+v4 = { u32 = [0xCDCDCDCD, 0xCDCDCDCD, 0xCDCDCDCD, 0x3C00BC00] }
+
+[[case]]
+name = "float16_4_3_3_xy_word_into_w"
+mnemonic = "vpkd3d128"
+source = "xenia InstrEmit_vpkd3d128 pack 3 shift 3 MakePermuteMask(0,0,0,1,0,2,1,2): w = packed.z = half(x):half(y)"
+insns = [0x18971ED0]   # vpkd3d128 v4,v3,5,3,3
+[case.in]
+v3 = { u32 = [0x3F000000, 0xBF000000, 0x3F800000, 0xBF800000] }
+v4 = { u32 = [0xCDCDCDCD, 0xCDCDCDCD, 0xCDCDCDCD, 0xCDCDCDCD] }
+[case.out]
+v4 = { u32 = [0xCDCDCDCD, 0xCDCDCDCD, 0xCDCDCDCD, 0x3800B800] }
+
+[[case]]
+name = "float16_4_nan_overflow_inf"
+mnemonic = "vpkd3d128"
+source = "xenia PACK EmitFLOAT16_4 vcvtps2ph round-toward-zero: NaN -> 0x7E00, 1e6 -> 0x7BFF, -inf -> 0xFC00, 65504 -> 0x7BFF"
+insns = [0x18961E10]   # vpkd3d128 v4,v3,5,2,0
+[case.in]
+v3 = { u32 = [0x7FC00000, 0x49742400, 0xFF800000, 0x477FE000] }
+v4 = { u32 = [0xCDCDCDCD, 0xCDCDCDCD, 0xCDCDCDCD, 0xCDCDCDCD] }
+[case.out]
+v4 = { u32 = [0xCDCDCDCD, 0xCDCDCDCD, 0x7E007BFF, 0xFC007BFF] }
+
+# ---------------------------------------------------------------------------
+# D3DCOLOR / SHORT_2 / SHORT_4 / UINT_2101010 beyond Xenia's cases
+# ---------------------------------------------------------------------------
+
+[[case]]
+name = "d3dcolor_1_3_same_register"
+mnemonic = "vpkd3d128"
+source = "xenia instr_vpkd3d128.s test_vpkd3d128_d3dcolor_1_3 with vd == vb: y z w keep the old floats"
+insns = [0x18611ED0]   # vpkd3d128 v3,v3,0,1,3
+[case.in]
+v3 = { u32 = [0x40400001, 0x40400002, 0x40400003, 0x40400004] }
+[case.out]
+v3 = { u32 = [0x04010203, 0x40400002, 0x40400003, 0x40400004] }
+
+[[case]]
+name = "short2_nan_takes_min_overflow_takes_max"
+mnemonic = "vpkd3d128"
+source = "xenia PACK EmitSHORT_2: vmaxps(src, 0x403F8001) returns the constant for NaN -> 0x8001; 4.0 > max -> 0x7FFF"
+insns = [0x18851E10]   # vpkd3d128 v4,v3,1,1,0
+[case.in]
+v3 = { u32 = [0x7FC00000, 0x40800000, 0x00000000, 0x00000000] }
+v4 = { u32 = [0xCDCDCDCD, 0xCDCDCDCD, 0xCDCDCDCD, 0xCDCDCDCD] }
+[case.out]
+v4 = { u32 = [0xCDCDCDCD, 0xCDCDCDCD, 0xCDCDCDCD, 0x80017FFF] }
+
+[[case]]
+name = "short2_2_1_zero_fills_y"
+mnemonic = "vpkd3d128"
+source = "xenia InstrEmit_vpkd3d128 pack 2 shift 1 MakePermuteMask(0,0,1,2,1,3,0,3) + PACK EmitSHORT_2 (test_vpkd3d128_short2_1 input; lanes 0..2 of the pack are zero)"
+insns = [0x18861E50]   # vpkd3d128 v4,v3,1,2,1
+[case.in]
+v3 = { u32 = [0x40404000, 0x403FC000, 0x40400003, 0x403F8001] }
+v4 = { u32 = [0xCDCDCDCD, 0xCDCDCDCD, 0xCDCDCDCD, 0xCDCDCDCD] }
+[case.out]
+v4 = { u32 = [0xCDCDCDCD, 0x00000000, 0x4000C000, 0xCDCDCDCD] }
+
+[[case]]
+name = "short4_3_3_xy_word_into_w"
+mnemonic = "vpkd3d128"
+source = "xenia InstrEmit_vpkd3d128 pack 3 shift 3 MakePermuteMask(0,0,0,1,0,2,1,2) + PACK EmitSHORT_4 (test_vpkd3d128_short4_0 input): w = packed.z = x:y"
+insns = [0x18931ED0]   # vpkd3d128 v4,v3,4,3,3
+[case.in]
+v3 = { u32 = [0x403F8001, 0x403FFFF8, 0x4040007F, 0x40400000] }
+v4 = { u32 = [0xCDCDCDCD, 0xCDCDCDCD, 0xCDCDCDCD, 0xCDCDCDCD] }
+[case.out]
+v4 = { u32 = [0xCDCDCDCD, 0xCDCDCDCD, 0xCDCDCDCD, 0x8001FFF8] }
+
+[[case]]
+name = "short4_1_0_zw_word_into_w"
+mnemonic = "vpkd3d128"
+source = "xenia InstrEmit_vpkd3d128 pack 1 shift 0 MakePermuteMask(0,0,0,1,0,2,1,3) + PACK EmitSHORT_4: w = packed.w = z:w"
+insns = [0x18911E10]   # vpkd3d128 v4,v3,4,1,0
+[case.in]
+v3 = { u32 = [0x403F8001, 0x403FFFF8, 0x4040007F, 0x40400000] }
+v4 = { u32 = [0xCDCDCDCD, 0xCDCDCDCD, 0xCDCDCDCD, 0xCDCDCDCD] }
+[case.out]
+v4 = { u32 = [0xCDCDCDCD, 0xCDCDCDCD, 0xCDCDCDCD, 0x007F0000] }
+
+[[case]]
+name = "uint_2101010_nan_takes_min"
+mnemonic = "vpkd3d128"
+source = "xenia PACK EmitUINT_2101010: vmaxps with XMMPackUINT_2101010_MinUnpacked returns the constant for NaN (0x201 for xyz, 0 for w)"
+insns = [0x18891E10]   # vpkd3d128 v4,v3,2,1,0
+[case.in]
+v3 = { u32 = [0x7FC00000, 0x7FC00000, 0x7FC00000, 0x7FC00000] }
+v4 = { u32 = [0xCDCDCDCD, 0xCDCDCDCD, 0xCDCDCDCD, 0xCDCDCDCD] }
+[case.out]
+v4 = { u32 = [0xCDCDCDCD, 0xCDCDCDCD, 0xCDCDCDCD, 0x20180601] }
+
+[[case]]
+name = "uint_2101010_3_3_broadcast_quirk"
+mnemonic = "vpkd3d128"
+source = "xenia PACK EmitUINT_2101010 combine (vshufps/vorps twice) leaves the packed word in all four lanes, so pack 3 shift 3 (w = packed.z) gets the value, not zero (test_vpkd3d128_uint_2101010_1 input)"
+insns = [0x188B1ED0]   # vpkd3d128 v4,v3,2,3,3
+[case.in]
+v3 = { u32 = [0x42C80000, 0xC2C80000, 0x40400000, 0x3F800000] }
+v4 = { u32 = [0xCDCDCDCD, 0xCDCDCDCD, 0xCDCDCDCD, 0xCDCDCDCD] }
+[case.out]
+v4 = { u32 = [0xCDCDCDCD, 0xCDCDCDCD, 0xCDCDCDCD, 0x000805FF] }
+
+[[case]]
+name = "uint_2101010_2_0_broadcast_quirk"
+mnemonic = "vpkd3d128"
+source = "xenia PACK EmitUINT_2101010 combine leaves the packed word in all four lanes; pack 2 shift 0 copies z and w"
+insns = [0x188A1E10]   # vpkd3d128 v4,v3,2,2,0
+[case.in]
+v3 = { u32 = [0x42C80000, 0xC2C80000, 0x40400000, 0x3F800000] }
+v4 = { u32 = [0xCDCDCDCD, 0xCDCDCDCD, 0xCDCDCDCD, 0xCDCDCDCD] }
+[case.out]
+v4 = { u32 = [0xCDCDCDCD, 0xCDCDCDCD, 0x000805FF, 0x000805FF] }
+
+# ---------------------------------------------------------------------------
+# ULONG_4202020 (type 6). Xenia has no .s test; expectations follow the x64
+# sequence: saturate xyz to [0x40380001, 0x4047FFFF] and w to [3.0, 0x4040000F],
+# mask to 20/4 bits, then the XZ/YW vpshufb pair builds the 64-bit value
+# w:4 z:20 y:20 x:20 with its low dword in element 3 and high dword in
+# element 2: elem3 = x | (y & 0xFFF) << 20, elem2 = y >> 12 | z << 8 | w << 28.
+# ---------------------------------------------------------------------------
+
+[[case]]
+name = "ulong_4202020_2_0_small_values"
+mnemonic = "vpkd3d128"
+source = "xenia x64_seq_vector.cc PACK EmitULONG_4202020 (XMMPackULONG_4202020_* constants in x64_emitter.cc); x y z w = 3.0 + {1,2,3,1} * 2^-22"
+insns = [0x189A1E10]   # vpkd3d128 v4,v3,6,2,0
+[case.in]
+v3 = { u32 = [0x40400001, 0x40400002, 0x40400003, 0x40400001] }
+v4 = { u32 = [0xCDCDCDCD, 0xCDCDCDCD, 0xCDCDCDCD, 0xCDCDCDCD] }
+[case.out]
+v3 = { u32 = [0x40400001, 0x40400002, 0x40400003, 0x40400001] }
+v4 = { u32 = [0xCDCDCDCD, 0xCDCDCDCD, 0x10000300, 0x00200001] }
+
+[[case]]
+name = "ulong_4202020_2_0_saturation"
+mnemonic = "vpkd3d128"
+source = "xenia PACK EmitULONG_4202020: 100 -> max 0x7FFFF, -100 -> min 0x80001, 2.875 (below min) -> 0x80001, w 20.0 -> max 0xF"
+insns = [0x189A1E10]   # vpkd3d128 v4,v3,6,2,0
+[case.in]
+v3 = { u32 = [0x42C80000, 0xC2C80000, 0x40380000, 0x41A00000] }
+v4 = { u32 = [0xCDCDCDCD, 0xCDCDCDCD, 0xCDCDCDCD, 0xCDCDCDCD] }
+[case.out]
+v4 = { u32 = [0xCDCDCDCD, 0xCDCDCDCD, 0xF8000180, 0x0017FFFF] }
+
+[[case]]
+name = "ulong_4202020_2_2"
+mnemonic = "vpkd3d128"
+source = "xenia InstrEmit_vpkd3d128 pack 2 shift 2 MakePermuteMask(1,2,1,3,0,2,0,3) + PACK EmitULONG_4202020"
+insns = [0x189A1E90]   # vpkd3d128 v4,v3,6,2,2
+[case.in]
+v3 = { u32 = [0x40400001, 0x40400002, 0x40400003, 0x40400001] }
+v4 = { u32 = [0xCDCDCDCD, 0xCDCDCDCD, 0xCDCDCDCD, 0xCDCDCDCD] }
+[case.out]
+v4 = { u32 = [0x10000300, 0x00200001, 0xCDCDCDCD, 0xCDCDCDCD] }
+
+[[case]]
+name = "ulong_4202020_3_3_high_dword_into_w"
+mnemonic = "vpkd3d128"
+source = "xenia InstrEmit_vpkd3d128 pack 3 shift 3 MakePermuteMask(0,0,0,1,0,2,1,2) + PACK EmitULONG_4202020: w = packed.z"
+insns = [0x189B1ED0]   # vpkd3d128 v4,v3,6,3,3
+[case.in]
+v3 = { u32 = [0x40400001, 0x40400002, 0x40400003, 0x40400001] }
+v4 = { u32 = [0xCDCDCDCD, 0xCDCDCDCD, 0xCDCDCDCD, 0xCDCDCDCD] }
+[case.out]
+v4 = { u32 = [0xCDCDCDCD, 0xCDCDCDCD, 0xCDCDCDCD, 0x10000300] }
