@@ -1,0 +1,154 @@
+# vpkswss128 vD,vA,vB: VX128 form, OP 5, xop 640. Pack signed word to signed
+# halfword with saturation:
+#   vD.h[0..3] = clamp(vA.w[0..3], -32768, 32767)
+#   vD.h[4..7] = clamp(vB.w[0..3], -32768, 32767)
+# Xenia InstrEmit_vpkswss_ (ppc_emit_altivec.cc): Pack(va, vb, 16_IN_32 |
+# IN_SIGNED | OUT_SIGNED | OUT_SATURATE); x64_seq_vector.cc Emit16_IN_32 uses
+# vpackssdw. VSCR[SAT] is not modeled by XenonRecomp.
+#
+# Plain vpkswss (VX form, xop 462) is hand-encoded:
+# 0x10000000 | vd<<21 | va<<16 | vb<<11 | 462.
+
+# ---------------------------------------------------------------------------
+# Xenia src/xenia/cpu/ppc/testing/instr_vpkswss128.s, transcribed
+# ---------------------------------------------------------------------------
+
+[[case]]
+name = "xenia_test_vpkswss128_1_small_values"
+mnemonic = "vpkswss128"
+source = "xenia src/xenia/cpu/ppc/testing/instr_vpkswss128.s test_vpkswss128_1; ppc_emit_altivec.cc InstrEmit_vpkswss_"
+insns = [0x14A32280]   # vpkswss128 v5,v3,v4
+[case.in]
+v3 = { u32 = [0x00000001, 0x00000002, 0x00000003, 0x00000004] }
+v4 = { u32 = [0x00000005, 0x00000006, 0x00000007, 0x00000008] }
+[case.out]
+v3 = { u32 = [0x00000001, 0x00000002, 0x00000003, 0x00000004] }
+v4 = { u32 = [0x00000005, 0x00000006, 0x00000007, 0x00000008] }
+v5 = { u32 = [0x00010002, 0x00030004, 0x00050006, 0x00070008] }
+
+[[case]]
+name = "xenia_test_vpkswss128_2_int_extremes"
+mnemonic = "vpkswss128"
+source = "xenia src/xenia/cpu/ppc/testing/instr_vpkswss128.s test_vpkswss128_2; ppc_emit_altivec.cc InstrEmit_vpkswss_"
+insns = [0x14A32280]   # vpkswss128 v5,v3,v4
+[case.in]
+v3 = { u32 = [0x7FFFFFFF, 0x80000000, 0x00000000, 0x00000004] }
+v4 = { u32 = [0x7FFFFFFF, 0x80000000, 0x00000000, 0x00000008] }
+[case.out]
+v3 = { u32 = [0x7FFFFFFF, 0x80000000, 0x00000000, 0x00000004] }
+v4 = { u32 = [0x7FFFFFFF, 0x80000000, 0x00000000, 0x00000008] }
+v5 = { u32 = [0x7FFF8000, 0x00000004, 0x7FFF8000, 0x00000008] }
+
+[[case]]
+name = "xenia_test_vpkswss128_3_short_boundaries"
+mnemonic = "vpkswss128"
+source = "xenia src/xenia/cpu/ppc/testing/instr_vpkswss128.s test_vpkswss128_3; ppc_emit_altivec.cc InstrEmit_vpkswss_"
+insns = [0x14A32280]   # vpkswss128 v5,v3,v4
+[case.in]
+# {-1, -32768, 0, 32767}
+v3 = { u32 = [0xFFFFFFFF, 0xFFFF8000, 0x00000000, 0x00007FFF] }
+# {-2, -32769, 1, 32768}
+v4 = { u32 = [0xFFFFFFFE, 0xFFFF7FFF, 0x00000001, 0x00008000] }
+[case.out]
+v3 = { u32 = [0xFFFFFFFF, 0xFFFF8000, 0x00000000, 0x00007FFF] }
+v4 = { u32 = [0xFFFFFFFE, 0xFFFF7FFF, 0x00000001, 0x00008000] }
+# {-1, -32768, 0, 32767, -2, -32768, 1, 32767}
+v5 = { u32 = [0xFFFF8000, 0x00007FFF, 0xFFFE8000, 0x00017FFF] }
+
+# ---------------------------------------------------------------------------
+# Plain vpkswss (instr_vpkswss.s has the same three cases)
+# ---------------------------------------------------------------------------
+
+[[case]]
+name = "plain_vpkswss_xenia_test_vpkswss_3"
+mnemonic = "vpkswss"
+source = "xenia src/xenia/cpu/ppc/testing/instr_vpkswss.s test_vpkswss_3; ppc_emit_altivec.cc InstrEmit_vpkswss"
+insns = [0x10A321CE]   # vpkswss v5,v3,v4
+[case.in]
+v3 = { u32 = [0xFFFFFFFF, 0xFFFF8000, 0x00000000, 0x00007FFF] }
+v4 = { u32 = [0xFFFFFFFE, 0xFFFF7FFF, 0x00000001, 0x00008000] }
+[case.out]
+v5 = { u32 = [0xFFFF8000, 0x00007FFF, 0xFFFE8000, 0x00017FFF] }
+
+[[case]]
+name = "plain_vpkswss_xenia_test_vpkswss_2"
+mnemonic = "vpkswss"
+source = "xenia src/xenia/cpu/ppc/testing/instr_vpkswss.s test_vpkswss_2; ppc_emit_altivec.cc InstrEmit_vpkswss"
+insns = [0x10A321CE]   # vpkswss v5,v3,v4
+[case.in]
+v3 = { u32 = [0x7FFFFFFF, 0x80000000, 0x00000000, 0x00000004] }
+v4 = { u32 = [0x7FFFFFFF, 0x80000000, 0x00000000, 0x00000008] }
+[case.out]
+v5 = { u32 = [0x7FFF8000, 0x00000004, 0x7FFF8000, 0x00000008] }
+
+# ---------------------------------------------------------------------------
+# Element order: every lane distinct and in range, so a swapped vA/vB or a
+# reversed halfword order shows up directly.
+# ---------------------------------------------------------------------------
+
+[[case]]
+name = "lane_order_all_distinct"
+mnemonic = "vpkswss128"
+source = "ppc_emit_altivec.cc InstrEmit_vpkswss_: dest = VA halfwords then VB halfwords"
+insns = [0x14A32280]   # vpkswss128 v5,v3,v4
+[case.in]
+v3 = { u32 = [0x00001111, 0xFFFFEEEE, 0x00003333, 0xFFFFCCCC] }
+v4 = { u32 = [0x00005555, 0xFFFFAAAA, 0x00007777, 0xFFFF8888] }
+v5 = { u32 = [0xDEADBEEF, 0xDEADBEEF, 0xDEADBEEF, 0xDEADBEEF] }
+[case.out]
+v5 = { u32 = [0x1111EEEE, 0x3333CCCC, 0x5555AAAA, 0x77778888] }
+
+# Saturation in both directions in every lane position of both sources.
+[[case]]
+name = "saturate_every_lane"
+mnemonic = "vpkswss128"
+source = "x64_seq_vector.cc Emit16_IN_32 signed->signed saturate (vpackssdw)"
+insns = [0x14A32280]   # vpkswss128 v5,v3,v4
+[case.in]
+v3 = { u32 = [0x00008000, 0xFFFF7FFF, 0x12345678, 0x87654321] }
+v4 = { u32 = [0x7FFFFFFF, 0x80000000, 0x00010000, 0xFFFF0000] }
+[case.out]
+v5 = { u32 = [0x7FFF8000, 0x7FFF8000, 0x7FFF8000, 0x7FFF8000] }
+
+# ---------------------------------------------------------------------------
+# Game register numbers
+# ---------------------------------------------------------------------------
+
+# vpkswss128 v60,v28,v27: sources below 32 (VA128/VB128 high bits clear),
+# destination above. Follows two vaddsws in the game.
+[[case]]
+name = "game_v60_v28_v27"
+mnemonic = "vpkswss128"
+source = "ppc_emit_altivec.cc InstrEmit_vpkswss128; HaloWars site vpkswss128 v60,v28,v27"
+insns = [0x179CDA84]   # vpkswss128 v60,v28,v27
+[case.in]
+v28 = { u32 = [0x00000100, 0xFFFFFF00, 0x00010000, 0xFFFF0000] }
+v27 = { u32 = [0x00007FFF, 0xFFFF8000, 0x00000000, 0x00000001] }
+[case.out]
+v28 = { u32 = [0x00000100, 0xFFFFFF00, 0x00010000, 0xFFFF0000] }
+v27 = { u32 = [0x00007FFF, 0xFFFF8000, 0x00000000, 0x00000001] }
+v60 = { u32 = [0x0100FF00, 0x7FFF8000, 0x7FFF8000, 0x00000001] }
+
+# vpkswss128 v63,v63,v63: all three operands the same register.
+[[case]]
+name = "game_v63_v63_v63_all_alias"
+mnemonic = "vpkswss128"
+source = "ppc_emit_altivec.cc InstrEmit_vpkswss128; HaloWars site vpkswss128 v63,v63,v63"
+insns = [0x17FFFAA5]   # vpkswss128 v63,v63,v63
+[case.in]
+v63 = { u32 = [0x00000001, 0xFFFFFFFE, 0x00008000, 0xFFFF7FFF] }
+[case.out]
+v63 = { u32 = [0x0001FFFE, 0x7FFF8000, 0x0001FFFE, 0x7FFF8000] }
+
+# vpkswss128 v61,v63,v62: vA has the VA128 high bit set (v63 = 0x3F, bit 5).
+[[case]]
+name = "game_v61_v63_v62"
+mnemonic = "vpkswss128"
+source = "ppc_emit_altivec.cc InstrEmit_vpkswss128; HaloWars site vpkswss128 v61,v63,v62"
+insns = [0x17BFF2A5]   # vpkswss128 v61,v63,v62
+[case.in]
+v63 = { u32 = [0x00000000, 0x00007FFF, 0xFFFF8000, 0x00000001] }
+v62 = { u32 = [0x40000000, 0xC0000000, 0x00000002, 0xFFFFFFFD] }
+v61 = { u32 = [0xCDCDCDCD, 0xCDCDCDCD, 0xCDCDCDCD, 0xCDCDCDCD] }
+[case.out]
+v61 = { u32 = [0x00007FFF, 0x80000001, 0x7FFF8000, 0x0002FFFD] }

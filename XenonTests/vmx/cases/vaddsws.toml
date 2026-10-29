@@ -1,0 +1,89 @@
+# vaddsws vD,vA,vB: VX form, OP 4, xop 896. Add signed word, saturate:
+#   vD.w[i] = clamp(vA.w[i] + vB.w[i], -2^31, 2^31-1)
+# Xenia InstrEmit_vaddsws (ppc_emit_altivec.cc): VectorAdd INT32_TYPE,
+# ARITHMETIC_SATURATE (x64_seq_vector.cc VECTOR_ADD INT32 saturate: vpaddd
+# with an overflow check that selects 0x7FFFFFFF / 0x80000000 by sign).
+# Xenia also writes VSCR[SAT]; XenonRecomp does not model VSCR for any of the
+# saturating forms, so only vD is checked here. Xenia has no instr_vaddsws.s.
+#
+# Words are hand-encoded: 0x10000000 | vd<<21 | va<<16 | vb<<11 | 896.
+
+[[case]]
+name = "no_saturation_mixed_signs"
+mnemonic = "vaddsws"
+source = "ppc_emit_altivec.cc InstrEmit_vaddsws; x64_seq_vector.cc VECTOR_ADD INT32_TYPE ARITHMETIC_SATURATE"
+insns = [0x10A32380]   # vaddsws v5,v3,v4
+[case.in]
+v3 = { s32 = [1, -1, 1000000, -1000000] }
+v4 = { s32 = [2, -2, -3000000, 3000000] }
+v5 = { u32 = [0xDEADBEEF, 0xDEADBEEF, 0xDEADBEEF, 0xDEADBEEF] }
+[case.out]
+v3 = { s32 = [1, -1, 1000000, -1000000] }
+v4 = { s32 = [2, -2, -3000000, 3000000] }
+v5 = { s32 = [3, -3, -2000000, 2000000] }
+
+# Positive overflow by one in element 0, negative overflow by one in element
+# 1, max + max and min + min in elements 2 and 3.
+[[case]]
+name = "saturate_by_one_and_by_max"
+mnemonic = "vaddsws"
+source = "ppc_emit_altivec.cc InstrEmit_vaddsws: clamp to [-2^31, 2^31-1]"
+insns = [0x10A32380]   # vaddsws v5,v3,v4
+[case.in]
+v3 = { u32 = [0x7FFFFFFF, 0x80000000, 0x7FFFFFFF, 0x80000000] }
+v4 = { u32 = [0x00000001, 0xFFFFFFFF, 0x7FFFFFFF, 0x80000000] }
+[case.out]
+v5 = { u32 = [0x7FFFFFFF, 0x80000000, 0x7FFFFFFF, 0x80000000] }
+
+# Exactly at the boundary (no saturation): max + 0, min + 0, max + min,
+# 0x40000000 + 0x3FFFFFFF.
+[[case]]
+name = "boundary_without_saturation"
+mnemonic = "vaddsws"
+source = "ppc_emit_altivec.cc InstrEmit_vaddsws"
+insns = [0x10A32380]   # vaddsws v5,v3,v4
+[case.in]
+v3 = { u32 = [0x7FFFFFFF, 0x80000000, 0x7FFFFFFF, 0x40000000] }
+v4 = { u32 = [0x00000000, 0x00000000, 0x80000000, 0x3FFFFFFF] }
+[case.out]
+v5 = { u32 = [0x7FFFFFFF, 0x80000000, 0xFFFFFFFF, 0x7FFFFFFF] }
+
+# Just over the boundary from mid-range values: 2^30 + 2^30 saturates high,
+# -2^30 + (-2^30 - 1) saturates low; the other lanes wrap-free.
+[[case]]
+name = "saturate_from_midrange"
+mnemonic = "vaddsws"
+source = "ppc_emit_altivec.cc InstrEmit_vaddsws"
+insns = [0x10A32380]   # vaddsws v5,v3,v4
+[case.in]
+v3 = { u32 = [0x40000000, 0xC0000000, 0xFFFFFFFF, 0x00000000] }
+v4 = { u32 = [0x40000000, 0xBFFFFFFF, 0xFFFFFFFF, 0x80000000] }
+[case.out]
+v5 = { u32 = [0x7FFFFFFF, 0x80000000, 0xFFFFFFFE, 0x80000000] }
+
+# The game's two sites: vaddsws v28,v30,v8 and v27,v29,v6, run back to back
+# as they are in the game (vctsxs results plus an offset, then vpkswss128).
+[[case]]
+name = "game_v28_v30_v8_and_v27_v29_v6"
+mnemonic = "vaddsws"
+source = "ppc_emit_altivec.cc InstrEmit_vaddsws; HaloWars sites vaddsws v28,v30,v8 / vaddsws v27,v29,v6"
+insns = [0x139E4380, 0x137D3380]   # vaddsws v28,v30,v8 ; vaddsws v27,v29,v6
+[case.in]
+v30 = { s32 = [100, -100, 2147483647, -2147483648] }
+v8  = { s32 = [28, 28, 28, 28] }
+v29 = { s32 = [0, 65535, -65536, 2147483000] }
+v6  = { s32 = [-1, -65535, -65536, 1000] }
+[case.out]
+v28 = { s32 = [128, -72, 2147483647, -2147483620] }
+v27 = { s32 = [-1, 0, -131072, 2147483647] }
+
+# All three operands the same register: doubles each lane.
+[[case]]
+name = "alias_v3_v3_v3"
+mnemonic = "vaddsws"
+source = "ppc_emit_altivec.cc InstrEmit_vaddsws"
+insns = [0x10631B80]   # vaddsws v3,v3,v3
+[case.in]
+v3 = { u32 = [0x00000005, 0xFFFFFFFB, 0x40000000, 0xC0000000] }
+[case.out]
+v3 = { u32 = [0x0000000A, 0xFFFFFFF6, 0x7FFFFFFF, 0x80000000] }

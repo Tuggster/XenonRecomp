@@ -1756,6 +1756,17 @@ bool Recompiler::Recompile(
         println("\tsimde_mm_store_si128((simde__m128i*){}.s16, simde_mm_adds_epi16(simde_mm_load_si128((simde__m128i*){}.s16), simde_mm_load_si128((simde__m128i*){}.s16)));", v(insn.operands[0]), v(insn.operands[1]), v(insn.operands[2]));
         break;
 
+    case PPC_INST_VADDSWS:
+        // Signed word add with saturation. Xenia: InstrEmit_vaddsws, VectorAdd
+        // INT32 ARITHMETIC_SATURATE. VSCR[SAT] is not modeled (same as the other
+        // saturating forms here). Same scalar shape as VSUBSWS.
+        for (size_t i = 0; i < 4; i++)
+        {
+            println("\t{}.s64 = int64_t({}.s32[{}]) + int64_t({}.s32[{}]);", temp(), v(insn.operands[1]), i, v(insn.operands[2]), i);
+            println("\t{}.s32[{}] = {}.s64 > INT_MAX ? INT_MAX : {}.s64 < INT_MIN ? INT_MIN : {}.s64;", v(insn.operands[0]), i, temp(), temp(), temp());
+        }
+        break;
+
     case PPC_INST_VADDUBM:
         println("\tsimde_mm_store_si128((simde__m128i*){}.u8, simde_mm_add_epi8(simde_mm_load_si128((simde__m128i*){}.u8), simde_mm_load_si128((simde__m128i*){}.u8)));", v(insn.operands[0]), v(insn.operands[1]), v(insn.operands[2]));
         break;
@@ -2171,6 +2182,15 @@ bool Recompiler::Recompile(
         break;
     }
 
+    case PPC_INST_VPKSWSS:
+    case PPC_INST_VPKSWSS128:
+        // PPC: halfwords 0..3 <- sat16(vA words 0..3), halfwords 4..7 <-
+        // sat16(vB words 0..3). Host storage is byte-reversed, so host s16[0..3]
+        // is PPC halfwords 7..4 = vB; hence packs(vB, vA), same operand swap as
+        // VPKSHUS. Xenia: InstrEmit_vpkswss_, PACK 16_IN_32 signed/signed/saturate.
+        println("\tsimde_mm_store_si128((simde__m128i*){}.s16, simde_mm_packs_epi32(simde_mm_load_si128((simde__m128i*){}.s32), simde_mm_load_si128((simde__m128i*){}.s32)));", v(insn.operands[0]), v(insn.operands[2]), v(insn.operands[1]));
+        break;
+
     case PPC_INST_VPKSHUS:
     case PPC_INST_VPKSHUS128:
         println("\tsimde_mm_store_si128((simde__m128i*){}.u8, simde_mm_packus_epi16(simde_mm_load_si128((simde__m128i*){}.s16), simde_mm_load_si128((simde__m128i*){}.s16)));", v(insn.operands[0]), v(insn.operands[2]), v(insn.operands[1]));
@@ -2217,6 +2237,9 @@ bool Recompiler::Recompile(
         break;
 
     case PPC_INST_VSEL:
+    case PPC_INST_VSEL128:
+        // vD = (vA & ~vC) | (vB & vC). For vsel128 the mask is vD itself
+        // (operands[3] = VS128), matching Xenia's InstrEmit_vsel128.
         println("\tsimde_mm_store_si128((simde__m128i*){}.u8, simde_mm_or_si128(simde_mm_andnot_si128(simde_mm_load_si128((simde__m128i*){}.u8), simde_mm_load_si128((simde__m128i*){}.u8)), simde_mm_and_si128(simde_mm_load_si128((simde__m128i*){}.u8), simde_mm_load_si128((simde__m128i*){}.u8))));", v(insn.operands[0]), v(insn.operands[3]), v(insn.operands[1]), v(insn.operands[3]), v(insn.operands[2]));
         break;
 
@@ -2229,6 +2252,16 @@ bool Recompiler::Recompile(
     case PPC_INST_VSLDOI:
     case PPC_INST_VSLDOI128:
         println("\tsimde_mm_store_si128((simde__m128i*){}.u8, simde_mm_alignr_epi8(simde_mm_load_si128((simde__m128i*){}.u8), simde_mm_load_si128((simde__m128i*){}.u8), {}));", v(insn.operands[0]), v(insn.operands[1]), v(insn.operands[2]), 16 - insn.operands[3]);
+        break;
+
+    case PPC_INST_VSLO:
+    case PPC_INST_VSLO128:
+        // Shift left by octet: vD = vA << ((vB byte 15 & 0x78) >> 3) bytes,
+        // zeros shifted in (Xenia InstrEmit_vslo_). In the byte-reversed host
+        // layout PPC byte 15 is u8[0] and a PPC left shift moves bytes to higher
+        // host indices, so host byte j takes vA byte j - n; pshufb zeroes lanes
+        // whose index went negative. Loads precede the store, so vD may alias.
+        println("\tsimde_mm_store_si128((simde__m128i*){}.u8, simde_mm_shuffle_epi8(simde_mm_load_si128((simde__m128i*){}.u8), simde_mm_sub_epi8(simde_mm_setr_epi8(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15), simde_mm_set1_epi8(({}.u8[0] & 0x78) >> 3))));", v(insn.operands[0]), v(insn.operands[1]), v(insn.operands[2]));
         break;
 
     case PPC_INST_VSLW:
@@ -2296,6 +2329,11 @@ bool Recompiler::Recompile(
     case PPC_INST_VSUBFP128:
         printSetFlushMode(true);
         println("\tsimde_mm_store_ps({}.f32, simde_mm_sub_ps(simde_mm_load_ps({}.f32), simde_mm_load_ps({}.f32)));", v(insn.operands[0]), v(insn.operands[1]), v(insn.operands[2]));
+        break;
+
+    case PPC_INST_VSUBSHS:
+        // Xenia: InstrEmit_vsubshs, VectorSub INT16 ARITHMETIC_SATURATE (vpsubsw).
+        println("\tsimde_mm_store_si128((simde__m128i*){}.s16, simde_mm_subs_epi16(simde_mm_load_si128((simde__m128i*){}.s16), simde_mm_load_si128((simde__m128i*){}.s16)));", v(insn.operands[0]), v(insn.operands[1]), v(insn.operands[2]));
         break;
 
     case PPC_INST_VSUBSWS:

@@ -1,0 +1,86 @@
+# vsubshs vD,vA,vB: VX form, OP 4, xop 1856. Subtract signed halfword,
+# saturate:
+#   vD.h[i] = clamp(vA.h[i] - vB.h[i], -32768, 32767)
+# Xenia InstrEmit_vsubshs (ppc_emit_altivec.cc): VectorSub INT16_TYPE,
+# ARITHMETIC_SATURATE (x64: vpsubsw). Xenia also writes VSCR[SAT]; XenonRecomp
+# does not model VSCR for any saturating form, so only vD is checked.
+#
+# Words are hand-encoded: 0x10000000 | vd<<21 | va<<16 | vb<<11 | 1856.
+
+# ---------------------------------------------------------------------------
+# Xenia src/xenia/cpu/ppc/testing/instr_vsubshs.s, transcribed
+# ---------------------------------------------------------------------------
+
+[[case]]
+name = "xenia_test_vsubshs_1"
+mnemonic = "vsubshs"
+source = "xenia src/xenia/cpu/ppc/testing/instr_vsubshs.s test_vsubshs_1; ppc_emit_altivec.cc InstrEmit_vsubshs"
+insns = [0x10632740]   # vsubshs v3,v3,v4
+[case.in]
+v3 = { u32 = [0x7FFF8001, 0x7FFF8003, 0x7FFF8005, 0x80068007] }
+v4 = { u32 = [0x00018001, 0x10000000, 0x42568124, 0x00000000] }
+[case.out]
+v3 = { u32 = [0x7FFE0000, 0x6FFF8003, 0x3DA9FEE1, 0x80068007] }
+v4 = { u32 = [0x00018001, 0x10000000, 0x42568124, 0x00000000] }
+
+[[case]]
+name = "xenia_test_vsubshs_2_saturates_both_ways"
+mnemonic = "vsubshs"
+source = "xenia src/xenia/cpu/ppc/testing/instr_vsubshs.s test_vsubshs_2 (0x7FFF - (-1) -> 0x7FFF, 0x8002 - 5 -> 0x8000); ppc_emit_altivec.cc InstrEmit_vsubshs"
+insns = [0x10632740]   # vsubshs v3,v3,v4
+[case.in]
+v3 = { u32 = [0x7FFF8002, 0x7FFF8003, 0x7FFF8005, 0x80068007] }
+v4 = { u32 = [0xFFFF0005, 0x10000000, 0x42568124, 0x00000000] }
+[case.out]
+v3 = { u32 = [0x7FFF8000, 0x6FFF8003, 0x3DA9FEE1, 0x80068007] }
+v4 = { u32 = [0xFFFF0005, 0x10000000, 0x42568124, 0x00000000] }
+
+# ---------------------------------------------------------------------------
+# Saturation boundaries in every halfword lane
+# ---------------------------------------------------------------------------
+
+# Lanes: 7FFF-8000 (sat hi), 8000-7FFF (sat lo), 0-8000 (sat hi: 32768),
+# 8000-0001 (sat lo), 7FFF-0 (no), 8000-0 (no), 0-7FFF (no, -32767),
+# 0001-8000 (sat hi).
+[[case]]
+name = "saturate_every_lane"
+mnemonic = "vsubshs"
+source = "ppc_emit_altivec.cc InstrEmit_vsubshs: clamp(EXTS(VA) + ~EXTS(VB) + 1, -2^15, 2^15-1)"
+insns = [0x10A32740]   # vsubshs v5,v3,v4
+[case.in]
+v3 = { u16 = [0x7FFF, 0x8000, 0x0000, 0x8000, 0x7FFF, 0x8000, 0x0000, 0x0001] }
+v4 = { u16 = [0x8000, 0x7FFF, 0x8000, 0x0001, 0x0000, 0x0000, 0x7FFF, 0x8000] }
+v5 = { u32 = [0xDEADBEEF, 0xDEADBEEF, 0xDEADBEEF, 0xDEADBEEF] }
+[case.out]
+v3 = { u16 = [0x7FFF, 0x8000, 0x0000, 0x8000, 0x7FFF, 0x8000, 0x0000, 0x0001] }
+v4 = { u16 = [0x8000, 0x7FFF, 0x8000, 0x0001, 0x0000, 0x0000, 0x7FFF, 0x8000] }
+v5 = { u16 = [0x7FFF, 0x8000, 0x7FFF, 0x8000, 0x7FFF, 0x8000, 0x8001, 0x7FFF] }
+
+# Distinct in-range values in all eight lanes, no saturation; a lane swap or a
+# wrong operand order shows up directly.
+[[case]]
+name = "lane_order_no_saturation"
+mnemonic = "vsubshs"
+source = "ppc_emit_altivec.cc InstrEmit_vsubshs"
+insns = [0x10A32740]   # vsubshs v5,v3,v4
+[case.in]
+v3 = { s16 = [100, -100, 1000, -1000, 30000, -30000, 5, -5] }
+v4 = { s16 = [1, -2, -3, 4, -2767, 2768, 10, -10] }
+[case.out]
+v5 = { s16 = [99, -98, 1003, -1004, 32767, -32768, -5, 5] }
+
+# The game's site, vsubshs v7,v9,v13: a 16-bit difference with one lane
+# saturating low.
+[[case]]
+name = "game_v7_v9_v13"
+mnemonic = "vsubshs"
+source = "ppc_emit_altivec.cc InstrEmit_vsubshs; HaloWars site vsubshs v7,v9,v13"
+insns = [0x10E96F40]   # vsubshs v7,v9,v13
+[case.in]
+v9  = { s16 = [0, 0, 0, 0, -20000, 20000, 12345, -12345] }
+v13 = { s16 = [1, -1, 32767, -32768, 20000, -20000, 12345, -12345] }
+v7  = { u32 = [0xCDCDCDCD, 0xCDCDCDCD, 0xCDCDCDCD, 0xCDCDCDCD] }
+[case.out]
+v9  = { s16 = [0, 0, 0, 0, -20000, 20000, 12345, -12345] }
+v13 = { s16 = [1, -1, 32767, -32768, 20000, -20000, 12345, -12345] }
+v7  = { s16 = [-1, 1, -32767, 32767, -32768, 32767, 0, 0] }
