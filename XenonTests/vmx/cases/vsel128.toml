@@ -1,0 +1,175 @@
+# vsel128 vD,vA,vB,vD: VX128_2 form, OP 5, xop 848. Bitwise select:
+#   vD = (vA & ~mask) | (vB & mask)
+# where the mask is the third source. In the VMX128 encoding there is no VC
+# field; the mask is vD itself (Xenia InstrEmit_vsel128 passes VX128_VD128 as
+# vc; XenonRecomp's disassembler lists the operand as VS128, which decodes to
+# the same split VD128 field, so operands[3] == operands[0]).
+#
+# Plain vsel vD,vA,vB,vC (VXA form, xop 42) is hand-encoded here and shares the
+# same case; it has the separate VC field.
+#
+# Xenia's instr_vsel.s cases are transcribed first (as vsel128 and as plain
+# vsel), then the game's actual 128-register numbers.
+
+[[case]]
+name = "xenia_test_vsel_1_mask_zero_takes_va"
+mnemonic = "vsel128"
+source = "xenia src/xenia/cpu/ppc/testing/instr_vsel.s test_vsel_1; ppc_emit_altivec.cc InstrEmit_vsel_ (Select(vc, va, vb): mask bit 0 -> va)"
+insns = [0x14A32350]   # vsel128 v5,v3,v4,v5
+[case.in]
+v3 = { u32 = [0x00010203, 0x04050607, 0x08090A0B, 0x0C0D0E0F] }
+v4 = { u32 = [0x10111213, 0x14151617, 0x18191A1B, 0x1C1D1E1F] }
+v5 = { u32 = [0x00000000, 0x00000000, 0x00000000, 0x00000000] }
+[case.out]
+v3 = { u32 = [0x00010203, 0x04050607, 0x08090A0B, 0x0C0D0E0F] }
+v4 = { u32 = [0x10111213, 0x14151617, 0x18191A1B, 0x1C1D1E1F] }
+v5 = { u32 = [0x00010203, 0x04050607, 0x08090A0B, 0x0C0D0E0F] }
+
+[[case]]
+name = "xenia_test_vsel_2_mask_ones_takes_vb"
+mnemonic = "vsel128"
+source = "xenia src/xenia/cpu/ppc/testing/instr_vsel.s test_vsel_2; ppc_emit_altivec.cc InstrEmit_vsel_"
+insns = [0x14A32350]   # vsel128 v5,v3,v4,v5
+[case.in]
+v3 = { u32 = [0x00010203, 0x04050607, 0x08090A0B, 0x0C0D0E0F] }
+v4 = { u32 = [0x10111213, 0x14151617, 0x18191A1B, 0x1C1D1E1F] }
+v5 = { u32 = [0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF] }
+[case.out]
+v3 = { u32 = [0x00010203, 0x04050607, 0x08090A0B, 0x0C0D0E0F] }
+v4 = { u32 = [0x10111213, 0x14151617, 0x18191A1B, 0x1C1D1E1F] }
+v5 = { u32 = [0x10111213, 0x14151617, 0x18191A1B, 0x1C1D1E1F] }
+
+[[case]]
+name = "xenia_test_vsel_3_single_bit_mask"
+mnemonic = "vsel128"
+source = "xenia src/xenia/cpu/ppc/testing/instr_vsel.s test_vsel_3; ppc_emit_altivec.cc InstrEmit_vsel_"
+insns = [0x14A32350]   # vsel128 v5,v3,v4,v5
+[case.in]
+v3 = { u32 = [0x0C010203, 0x04050607, 0x08090A0B, 0x0C0D0E0F] }
+v4 = { u32 = [0x1D111213, 0x14151617, 0x18191A1B, 0x1C1D1E1F] }
+v5 = { u32 = [0x10101010, 0x10101010, 0x10101010, 0x10101010] }
+[case.out]
+v3 = { u32 = [0x0C010203, 0x04050607, 0x08090A0B, 0x0C0D0E0F] }
+v4 = { u32 = [0x1D111213, 0x14151617, 0x18191A1B, 0x1C1D1E1F] }
+v5 = { u32 = [0x1C111213, 0x14151617, 0x18191A1B, 0x1C1D1E1F] }
+
+[[case]]
+name = "xenia_test_vsel_4_result_equals_mask"
+mnemonic = "vsel128"
+source = "xenia src/xenia/cpu/ppc/testing/instr_vsel.s test_vsel_4; ppc_emit_altivec.cc InstrEmit_vsel_"
+insns = [0x14A32350]   # vsel128 v5,v3,v4,v5
+[case.in]
+v3 = { u32 = [0x00000000, 0x00000000, 0x00000000, 0x00000000] }
+v4 = { u32 = [0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF] }
+v5 = { u32 = [0x01234567, 0x89ABCDEF, 0xFEDCBA98, 0x76543210] }
+[case.out]
+v3 = { u32 = [0x00000000, 0x00000000, 0x00000000, 0x00000000] }
+v4 = { u32 = [0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF] }
+v5 = { u32 = [0x01234567, 0x89ABCDEF, 0xFEDCBA98, 0x76543210] }
+
+[[case]]
+name = "xenia_test_vsel_5_result_equals_not_mask"
+mnemonic = "vsel128"
+source = "xenia src/xenia/cpu/ppc/testing/instr_vsel.s test_vsel_5; ppc_emit_altivec.cc InstrEmit_vsel_"
+insns = [0x14A32350]   # vsel128 v5,v3,v4,v5
+[case.in]
+v3 = { u32 = [0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF] }
+v4 = { u32 = [0x00000000, 0x00000000, 0x00000000, 0x00000000] }
+v5 = { u32 = [0x01234567, 0x89ABCDEF, 0xFEDCBA98, 0x76543210] }
+[case.out]
+v3 = { u32 = [0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF] }
+v4 = { u32 = [0x00000000, 0x00000000, 0x00000000, 0x00000000] }
+v5 = { u32 = [0xFEDCBA98, 0x76543210, 0x01234567, 0x89ABCDEF] }
+
+# Plain vsel (VXA form) with the same vectors as test_vsel_3, hand-encoded:
+# 0x10000000 | 5<<21 | 3<<16 | 4<<11 | 5<<6 | 42.
+[[case]]
+name = "plain_vsel_xenia_test_vsel_3"
+mnemonic = "vsel"
+source = "xenia src/xenia/cpu/ppc/testing/instr_vsel.s test_vsel_3; ppc_emit_altivec.cc InstrEmit_vsel (VXA.VC is the mask)"
+insns = [0x10A3216A]   # vsel v5,v3,v4,v5
+[case.in]
+v3 = { u32 = [0x0C010203, 0x04050607, 0x08090A0B, 0x0C0D0E0F] }
+v4 = { u32 = [0x1D111213, 0x14151617, 0x18191A1B, 0x1C1D1E1F] }
+v5 = { u32 = [0x10101010, 0x10101010, 0x10101010, 0x10101010] }
+[case.out]
+v5 = { u32 = [0x1C111213, 0x14151617, 0x18191A1B, 0x1C1D1E1F] }
+
+# Plain vsel where the mask is a register other than vD, to check the VC field
+# is really read (vsel v6,v3,v4,v5; v6 starts as garbage that must not matter).
+[[case]]
+name = "plain_vsel_separate_vc"
+mnemonic = "vsel"
+source = "ppc_emit_altivec.cc InstrEmit_vsel: VRT = (VRC bit 0) ? VRA : VRB per bit"
+insns = [0x10C3216A]   # vsel v6,v3,v4,v5
+[case.in]
+v3 = { u32 = [0xAAAAAAAA, 0xAAAAAAAA, 0xAAAAAAAA, 0xAAAAAAAA] }
+v4 = { u32 = [0x55555555, 0x55555555, 0x55555555, 0x55555555] }
+v5 = { u32 = [0x00000000, 0xFFFFFFFF, 0x0000FFFF, 0xF0F0F0F0] }
+v6 = { u32 = [0xDEADBEEF, 0xDEADBEEF, 0xDEADBEEF, 0xDEADBEEF] }
+[case.out]
+v5 = { u32 = [0x00000000, 0xFFFFFFFF, 0x0000FFFF, 0xF0F0F0F0] }
+v6 = { u32 = [0xAAAAAAAA, 0x55555555, 0xAAAA5555, 0x5A5A5A5A] }
+
+# ---------------------------------------------------------------------------
+# Game register numbers (split VD128/VA128/VB128 fields, high bits set)
+# ---------------------------------------------------------------------------
+
+# vsel128 v125,v63,v61,v125 is the most common site (6). Per-element masks so
+# every lane is exercised: element 0 all from vA, 1 all from vB, 2 and 3 mixed.
+[[case]]
+name = "game_v125_v63_v61_per_lane_masks"
+mnemonic = "vsel128"
+source = "ppc_emit_altivec.cc InstrEmit_vsel128 (vc = VX128_VD128); HaloWars site vsel128 v125,v63,v61,v125"
+insns = [0x17BFEB7D]   # vsel128 v125,v63,v61,v125
+[case.in]
+v63  = { u32 = [0x11111111, 0x22222222, 0x33333333, 0x44444444] }
+v61  = { u32 = [0xEEEEEEEE, 0xDDDDDDDD, 0xCCCCCCCC, 0xBBBBBBBB] }
+v125 = { u32 = [0x00000000, 0xFFFFFFFF, 0xFF00FF00, 0x0F0F0F0F] }
+[case.out]
+v63  = { u32 = [0x11111111, 0x22222222, 0x33333333, 0x44444444] }
+v61  = { u32 = [0xEEEEEEEE, 0xDDDDDDDD, 0xCCCCCCCC, 0xBBBBBBBB] }
+v125 = { u32 = [0x11111111, 0xDDDDDDDD, 0xCC33CC33, 0x4B4B4B4B] }
+
+# vA with its high field bit set (v124): vsel128 v126,v124,v63,v126.
+[[case]]
+name = "game_v126_v124_v63"
+mnemonic = "vsel128"
+source = "ppc_emit_altivec.cc InstrEmit_vsel128; HaloWars site vsel128 v126,v124,v63,v126"
+insns = [0x17DCFF7D]   # vsel128 v126,v124,v63,v126
+[case.in]
+v124 = { u32 = [0x01234567, 0x89ABCDEF, 0x00000000, 0xFFFFFFFF] }
+v63  = { u32 = [0xFEDCBA98, 0x76543210, 0xFFFFFFFF, 0x00000000] }
+v126 = { u32 = [0xFFFF0000, 0x0000FFFF, 0x80000001, 0x7FFFFFFE] }
+[case.out]
+v124 = { u32 = [0x01234567, 0x89ABCDEF, 0x00000000, 0xFFFFFFFF] }
+v63  = { u32 = [0xFEDCBA98, 0x76543210, 0xFFFFFFFF, 0x00000000] }
+v126 = { u32 = [0xFEDC4567, 0x89AB3210, 0x80000001, 0x80000001] }
+
+# vB without the high bit (v56) while vD/vA have it: vsel128 v124,v63,v56,v124.
+[[case]]
+name = "game_v124_v63_v56"
+mnemonic = "vsel128"
+source = "ppc_emit_altivec.cc InstrEmit_vsel128; HaloWars site vsel128 v124,v63,v56,v124"
+insns = [0x179FC37D]   # vsel128 v124,v63,v56,v124
+[case.in]
+v63  = { u32 = [0x3F800000, 0x40000000, 0x40400000, 0x40800000] }
+v56  = { u32 = [0xBF800000, 0xC0000000, 0xC0400000, 0xC0800000] }
+v124 = { u32 = [0x80000000, 0x80000000, 0x00000000, 0x80000000] }
+[case.out]
+v124 = { u32 = [0xBF800000, 0xC0000000, 0x40400000, 0xC0800000] }
+
+# vsel128 v122,v63,v59,v122: a typical float "select by compare result" use.
+[[case]]
+name = "game_v122_v63_v59"
+mnemonic = "vsel128"
+source = "ppc_emit_altivec.cc InstrEmit_vsel128; HaloWars site vsel128 v122,v63,v59,v122"
+insns = [0x175FDB7D]   # vsel128 v122,v63,v59,v122
+[case.in]
+v63  = { u32 = [0x00000001, 0x00000002, 0x00000003, 0x00000004] }
+v59  = { u32 = [0x00000010, 0x00000020, 0x00000030, 0x00000040] }
+v122 = { u32 = [0xFFFFFFFF, 0x00000000, 0xFFFFFFFF, 0x00000000] }
+[case.out]
+v63  = { u32 = [0x00000001, 0x00000002, 0x00000003, 0x00000004] }
+v59  = { u32 = [0x00000010, 0x00000020, 0x00000030, 0x00000040] }
+v122 = { u32 = [0x00000010, 0x00000002, 0x00000030, 0x00000004] }

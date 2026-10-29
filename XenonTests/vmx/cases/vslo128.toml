@@ -1,0 +1,239 @@
+# vslo128 vD,vA,vB: VX128 form, OP 5, xop 912. Shift left by octet:
+#   n  = (vB byte 15 & 0x78) >> 3        (byte 15 = low byte of element 3)
+#   vD = vA << (8 * n), zeros shifted in
+# Xenia InstrEmit_vslo_ (ppc_emit_altivec.cc): Extract(vb, 15, INT8) & 0x78,
+# >> 3, then Permute(LoadVectorShl(sh), va, zero). Bits 0..2 and bit 7 of the
+# shift byte are ignored, so n is 0..15.
+#
+# In element order, PPC byte i of the result is PPC byte i + n of vA, or zero
+# when i + n > 15: bytes move toward element 0 (the "left" of the big-endian
+# vector). In XenonRecomp's reversed host storage that is a move toward higher
+# u8 indices and the shift byte is u8[0].
+#
+# Plain vslo (VX form, xop 1036) shares the implementation; it is hand-encoded:
+# 0x10000000 | vd<<21 | va<<16 | vb<<11 | 1036.
+
+# ---------------------------------------------------------------------------
+# Xenia src/xenia/cpu/ppc/testing/instr_vslo.s, transcribed as vslo128
+# ---------------------------------------------------------------------------
+
+[[case]]
+name = "xenia_test_vslo_1_shift_byte_0x04_is_zero"
+mnemonic = "vslo128"
+source = "xenia src/xenia/cpu/ppc/testing/instr_vslo.s test_vslo_1; ppc_emit_altivec.cc InstrEmit_vslo_ (0x04 & 0x78 = 0)"
+insns = [0x14632390]   # vslo128 v3,v3,v4
+[case.in]
+v3 = { u32 = [0x00112233, 0x44556677, 0x8899AABB, 0xCCDDEEFF] }
+v4 = { u32 = [0x04040404, 0x04040404, 0x04040404, 0x04040404] }
+[case.out]
+v3 = { u32 = [0x00112233, 0x44556677, 0x8899AABB, 0xCCDDEEFF] }
+v4 = { u32 = [0x04040404, 0x04040404, 0x04040404, 0x04040404] }
+
+[[case]]
+name = "xenia_test_vslo_2_shift_1"
+mnemonic = "vslo128"
+source = "xenia src/xenia/cpu/ppc/testing/instr_vslo.s test_vslo_2; ppc_emit_altivec.cc InstrEmit_vslo_ (0x08 >> 3 = 1 octet)"
+insns = [0x14632390]   # vslo128 v3,v3,v4
+[case.in]
+v3 = { u32 = [0x00112233, 0x44556677, 0x8899AABB, 0xCCDDEEFF] }
+v4 = { u32 = [0x08080808, 0x08080808, 0x08080808, 0x08080808] }
+[case.out]
+v3 = { u32 = [0x11223344, 0x55667788, 0x99AABBCC, 0xDDEEFF00] }
+v4 = { u32 = [0x08080808, 0x08080808, 0x08080808, 0x08080808] }
+
+[[case]]
+name = "xenia_test_vslo_3_shift_2_low_bits_ignored"
+mnemonic = "vslo128"
+source = "xenia src/xenia/cpu/ppc/testing/instr_vslo.s test_vslo_3; ppc_emit_altivec.cc InstrEmit_vslo_ (0x12 & 0x78 = 0x10 -> 2 octets)"
+insns = [0x14632390]   # vslo128 v3,v3,v4
+[case.in]
+v3 = { u32 = [0x00112233, 0x44556677, 0x8899AABB, 0xCCDDEEFF] }
+v4 = { u32 = [0x12121212, 0x12121212, 0x12121212, 0x12121212] }
+[case.out]
+v3 = { u32 = [0x22334455, 0x66778899, 0xAABBCCDD, 0xEEFF0000] }
+v4 = { u32 = [0x12121212, 0x12121212, 0x12121212, 0x12121212] }
+
+[[case]]
+name = "xenia_test_vslo_4_bit7_ignored"
+mnemonic = "vslo128"
+source = "xenia src/xenia/cpu/ppc/testing/instr_vslo.s test_vslo_4; ppc_emit_altivec.cc InstrEmit_vslo_ (0x80 & 0x78 = 0)"
+insns = [0x14632390]   # vslo128 v3,v3,v4
+[case.in]
+v3 = { u32 = [0x00112233, 0x44556677, 0x8899AABB, 0xCCDDEEFF] }
+v4 = { u32 = [0x80808080, 0x80808080, 0x80808080, 0x80808080] }
+[case.out]
+v3 = { u32 = [0x00112233, 0x44556677, 0x8899AABB, 0xCCDDEEFF] }
+v4 = { u32 = [0x80808080, 0x80808080, 0x80808080, 0x80808080] }
+
+[[case]]
+name = "xenia_test_vslo_5_shift_15"
+mnemonic = "vslo128"
+source = "xenia src/xenia/cpu/ppc/testing/instr_vslo.s test_vslo_5; ppc_emit_altivec.cc InstrEmit_vslo_ (0xFF & 0x78 = 0x78 -> 15 octets)"
+insns = [0x14632390]   # vslo128 v3,v3,v4
+[case.in]
+v3 = { u32 = [0x00112233, 0x44556677, 0x8899AABB, 0xCCDDEEFF] }
+v4 = { u32 = [0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF] }
+[case.out]
+v3 = { u32 = [0xFF000000, 0x00000000, 0x00000000, 0x00000000] }
+v4 = { u32 = [0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF] }
+
+# ---------------------------------------------------------------------------
+# Plain vslo, same semantics (Xenia InstrEmit_vslo -> InstrEmit_vslo_)
+# ---------------------------------------------------------------------------
+
+[[case]]
+name = "plain_vslo_xenia_test_vslo_2"
+mnemonic = "vslo"
+source = "xenia src/xenia/cpu/ppc/testing/instr_vslo.s test_vslo_2; ppc_emit_altivec.cc InstrEmit_vslo"
+insns = [0x1063240C]   # vslo v3,v3,v4
+[case.in]
+v3 = { u32 = [0x00112233, 0x44556677, 0x8899AABB, 0xCCDDEEFF] }
+v4 = { u32 = [0x08080808, 0x08080808, 0x08080808, 0x08080808] }
+[case.out]
+v3 = { u32 = [0x11223344, 0x55667788, 0x99AABBCC, 0xDDEEFF00] }
+
+[[case]]
+name = "plain_vslo_separate_vd_shift_15"
+mnemonic = "vslo"
+source = "xenia src/xenia/cpu/ppc/testing/instr_vslo.s test_vslo_5; ppc_emit_altivec.cc InstrEmit_vslo"
+insns = [0x10A3240C]   # vslo v5,v3,v4
+[case.in]
+v3 = { u32 = [0x00112233, 0x44556677, 0x8899AABB, 0xCCDDEEFF] }
+v4 = { u32 = [0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF] }
+v5 = { u32 = [0xDEADBEEF, 0xDEADBEEF, 0xDEADBEEF, 0xDEADBEEF] }
+[case.out]
+v3 = { u32 = [0x00112233, 0x44556677, 0x8899AABB, 0xCCDDEEFF] }
+v5 = { u32 = [0xFF000000, 0x00000000, 0x00000000, 0x00000000] }
+
+# ---------------------------------------------------------------------------
+# Only byte 15 of vB is the shift amount; the rest of vB is noise.
+# ---------------------------------------------------------------------------
+
+# Every other byte of vB says "shift 15" but byte 15 says 0.
+[[case]]
+name = "only_byte15_counts_shift_0"
+mnemonic = "vslo128"
+source = "ppc_emit_altivec.cc InstrEmit_vslo_: Extract(LoadVR(vb), 15, INT8_TYPE)"
+insns = [0x14632390]   # vslo128 v3,v3,v4
+[case.in]
+v3 = { u32 = [0x00112233, 0x44556677, 0x8899AABB, 0xCCDDEEFF] }
+v4 = { u32 = [0x78787878, 0x78787878, 0x78787878, 0x78787800] }
+[case.out]
+v3 = { u32 = [0x00112233, 0x44556677, 0x8899AABB, 0xCCDDEEFF] }
+
+# Every other byte of vB is zero; byte 15 is 0x08 -> shift 1.
+[[case]]
+name = "only_byte15_counts_shift_1"
+mnemonic = "vslo128"
+source = "ppc_emit_altivec.cc InstrEmit_vslo_: Extract(LoadVR(vb), 15, INT8_TYPE)"
+insns = [0x14632390]   # vslo128 v3,v3,v4
+[case.in]
+v3 = { u32 = [0x00112233, 0x44556677, 0x8899AABB, 0xCCDDEEFF] }
+v4 = { u32 = [0x00000000, 0x00000000, 0x00000000, 0x00000008] }
+[case.out]
+v3 = { u32 = [0x11223344, 0x55667788, 0x99AABBCC, 0xDDEEFF00] }
+
+# Byte 15 = 0x7F: bits 0..2 ignored, & 0x78 = 0x78 -> 15.
+[[case]]
+name = "only_byte15_counts_shift_15_masked_0x7F"
+mnemonic = "vslo128"
+source = "ppc_emit_altivec.cc InstrEmit_vslo_: And(..., 0x78) then Shr 3"
+insns = [0x14632390]   # vslo128 v3,v3,v4
+[case.in]
+v3 = { u32 = [0x00112233, 0x44556677, 0x8899AABB, 0xCCDDEEFF] }
+v4 = { u32 = [0x00000000, 0x00000000, 0x00000000, 0x0000007F] }
+[case.out]
+v3 = { u32 = [0xFF000000, 0x00000000, 0x00000000, 0x00000000] }
+
+# Byte 15 = 0x87: bit 7 and bits 0..2 set, & 0x78 = 0 -> no shift.
+[[case]]
+name = "masked_bits_0x87_is_shift_0"
+mnemonic = "vslo128"
+source = "ppc_emit_altivec.cc InstrEmit_vslo_: And(..., 0x78)"
+insns = [0x14632390]   # vslo128 v3,v3,v4
+[case.in]
+v3 = { u32 = [0x00112233, 0x44556677, 0x8899AABB, 0xCCDDEEFF] }
+v4 = { u32 = [0x00000000, 0x00000000, 0x00000000, 0x00000087] }
+[case.out]
+v3 = { u32 = [0x00112233, 0x44556677, 0x8899AABB, 0xCCDDEEFF] }
+
+# Byte 15 = 0xBC: & 0x78 = 0x38 -> 7 octets (crosses an element boundary
+# and the 64-bit half).
+[[case]]
+name = "masked_bits_0xBC_is_shift_7"
+mnemonic = "vslo128"
+source = "ppc_emit_altivec.cc InstrEmit_vslo_: (0xBC & 0x78) >> 3 = 7"
+insns = [0x14632390]   # vslo128 v3,v3,v4
+[case.in]
+v3 = { u32 = [0x00112233, 0x44556677, 0x8899AABB, 0xCCDDEEFF] }
+v4 = { u32 = [0x00000000, 0x00000000, 0x00000000, 0x000000BC] }
+[case.out]
+v3 = { u32 = [0x778899AA, 0xBBCCDDEE, 0xFF000000, 0x00000000] }
+
+# Shift 8: exactly one 64-bit half.
+[[case]]
+name = "shift_8_half_vector"
+mnemonic = "vslo128"
+source = "ppc_emit_altivec.cc InstrEmit_vslo_: (0x40 & 0x78) >> 3 = 8"
+insns = [0x14632390]   # vslo128 v3,v3,v4
+[case.in]
+v3 = { u32 = [0x00112233, 0x44556677, 0x8899AABB, 0xCCDDEEFF] }
+v4 = { u32 = [0x00000000, 0x00000000, 0x00000000, 0x00000040] }
+[case.out]
+v3 = { u32 = [0x8899AABB, 0xCCDDEEFF, 0x00000000, 0x00000000] }
+
+# ---------------------------------------------------------------------------
+# Game register numbers and aliasing
+# ---------------------------------------------------------------------------
+
+# vslo128 v63,v58,v63: vB is also vD. The shift byte must be read before the
+# store. Shift 4 (one element).
+[[case]]
+name = "game_v63_v58_v63_vb_aliases_vd"
+mnemonic = "vslo128"
+source = "ppc_emit_altivec.cc InstrEmit_vslo128; HaloWars site vslo128 v63,v58,v63"
+insns = [0x17FAFBB5]   # vslo128 v63,v58,v63
+[case.in]
+v58 = { u32 = [0x00112233, 0x44556677, 0x8899AABB, 0xCCDDEEFF] }
+v63 = { u32 = [0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFF20] }
+[case.out]
+v58 = { u32 = [0x00112233, 0x44556677, 0x8899AABB, 0xCCDDEEFF] }
+v63 = { u32 = [0x44556677, 0x8899AABB, 0xCCDDEEFF, 0x00000000] }
+
+# vslo128 v61,v61,v63: vA is vD (the common lvlx/lvrx fixup pattern). Shift 3.
+[[case]]
+name = "game_v61_v61_v63_va_aliases_vd"
+mnemonic = "vslo128"
+source = "ppc_emit_altivec.cc InstrEmit_vslo128; HaloWars site vslo128 v61,v61,v63"
+insns = [0x17BDFBB5]   # vslo128 v61,v61,v63
+[case.in]
+v61 = { u32 = [0x00112233, 0x44556677, 0x8899AABB, 0xCCDDEEFF] }
+v63 = { u32 = [0x00000000, 0x00000000, 0x00000000, 0x00000018] }
+[case.out]
+v61 = { u32 = [0x33445566, 0x778899AA, 0xBBCCDDEE, 0xFF000000] }
+v63 = { u32 = [0x00000000, 0x00000000, 0x00000000, 0x00000018] }
+
+# vslo128 v62,v61,v62: vB is vD, vA has the high field bit clear in VA128 terms
+# (v61 = 0x3D -> bit 5 set, bit 6 clear). Shift 13.
+[[case]]
+name = "game_v62_v61_v62_shift_13"
+mnemonic = "vslo128"
+source = "ppc_emit_altivec.cc InstrEmit_vslo128; HaloWars site vslo128 v62,v61,v62"
+insns = [0x17DDF3B5]   # vslo128 v62,v61,v62
+[case.in]
+v61 = { u32 = [0x00112233, 0x44556677, 0x8899AABB, 0xCCDDEEFF] }
+v62 = { u32 = [0x00000000, 0x00000000, 0x00000000, 0x00000068] }
+[case.out]
+v62 = { u32 = [0xDDEEFF00, 0x00000000, 0x00000000, 0x00000000] }
+
+# vslo128 v56,v56,v63 with shift 15 and a distinct byte in every lane.
+[[case]]
+name = "game_v56_v56_v63_shift_15"
+mnemonic = "vslo128"
+source = "ppc_emit_altivec.cc InstrEmit_vslo128; HaloWars site vslo128 v56,v56,v63"
+insns = [0x1718FBB5]   # vslo128 v56,v56,v63
+[case.in]
+v56 = { u32 = [0x01020304, 0x05060708, 0x090A0B0C, 0x0D0E0F10] }
+v63 = { u32 = [0x12345678, 0x9ABCDEF0, 0x0F0F0F0F, 0xA5A5A578] }
+[case.out]
+v56 = { u32 = [0x10000000, 0x00000000, 0x00000000, 0x00000000] }
