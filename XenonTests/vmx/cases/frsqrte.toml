@@ -10,7 +10,7 @@
 # computes, and XenonRecomp follows Xenia: `f.f64 = 1.0 / sqrt(x.f64)`. Only Xenia's AVX512
 # path (vrsqrt14sd, a 14-bit estimate) differs, and it matches neither.
 #
-# Every Halo Wars site (frsqrte f13,f0 x2, f6,f10, f9,f12) feeds the result through one or two
+# Every Halo Wars site (frsqrte f13,f0 x2, f6,f10, f9,f12) feeds the result through three
 # Newton-Raphson steps (fmul/fnmsub/fmul/fmul with 3.0 and 0.5), which converge from either an
 # estimate or the exact value; see `game_sequence_newton_raphson`.
 #

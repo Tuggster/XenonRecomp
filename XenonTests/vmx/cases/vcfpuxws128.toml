@@ -7,7 +7,8 @@
 # vcvttps2dq (truncation) and shifted back after, and lanes that vcvttps2dq could not represent
 # (>= 2^32, +inf) are OR'd to 0xFFFFFFFF. Net semantics, which are also the AltiVec ISA's:
 #   truncate toward zero, saturate to [0, 0xFFFFFFFF], NaN -> 0.
-# The AVX512 path (vcvttps2udq with a zero-masking compare) gives the same results.
+# Xenia's AVX512 path disagrees for NaN: its _CMP_NLT_UQ mask is true for unordered lanes, so
+# vcvttps2udq gives 0xFFFFFFFF there. We follow the non-AVX512 path and the ISA (NaN -> 0).
 # XenonRecomp implements this with simde_mm_vctuxs (XenonUtils/ppc_context.h), written so the
 # result does not depend on cvttps_epi32's out-of-range behaviour (x86: INT_MIN; NEON: saturate).
 #
@@ -140,7 +141,7 @@ v3 = { u32 = [0x00000000, 0x00000000, 0x00000000, 0x00000000] }
 [[case]]
 name = "nan_lanes_are_zero"
 mnemonic = "vcfpuxws128"
-source = "xenia src/xenia/cpu/backend/x64/x64_seq_vector.cc VECTOR_CONVERT_F2I unsigned: vmaxps(src, 0) returns 0 for NaN; AVX512 path: _CMP_NLT_UQ mask... zero-masked (quiet, signalling, negative NaN, all-ones)"
+source = "xenia src/xenia/cpu/backend/x64/x64_seq_vector.cc VECTOR_CONVERT_F2I unsigned: vmaxps(src, 0) returns 0 for NaN (non-AVX512 path and AltiVec ISA; Xenia's AVX512 path would give 0xFFFFFFFF) (quiet, signalling, negative NaN, all-ones)"
 insns = [0x18600270]   # vcfpuxws128 v3,v0,0
 [case.in]
 v0 = { u32 = [0x7FC00000, 0xFFC00000, 0x7F800001, 0xFFFFFFFF] }
