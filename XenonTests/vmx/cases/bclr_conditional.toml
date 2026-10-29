@@ -1,0 +1,128 @@
+# Conditional branches to LR/CTR and function boundaries. XenonAnalyse's Function::Analyze used
+# to end a function at any bclr/bcctr whose BO had bit 0x10 (ignore CR) set, which is right for
+# blr/bctr (BO = 1z1zz) but wrong for bdzlr/bdnzlr (BO = 1z01y/1z00y): those fall through when
+# the count says so. Halo Wars' CRT memset (0x823BE050) ends in "stb; bdzlr-; stb; bdzlr-; stb;
+# blr" and was cut at the first bdzlr-, so the recompiled function returned after one tail byte
+# for every length with (len & 3) >= 2. The deflate decoder fills distance-1 runs with it, which
+# left stale bytes in every decompressed effect blob (gPlanarFogColor assert, Heap::AllocPhysical
+# crash, SIGBUS in sub_826E2F10).
+#
+# `analyze = true` sizes the case's function with the real Function::Analyze, as XenonRecomp does
+# for a function without a .pdata entry, so a wrong boundary shows up as missing side effects.
+#
+# Words: li r0,N 0x380000NN; mtctr r0 0x7C0903A6; stb r4,k(r6) 0x988600kk; bdzlr- 0x4F400020
+# (BO 0x1A); bdnzlr 0x4E000020 (BO 0x10); cmpwi r3,0 0x2C030000; beqlr 0x4D820020 (BO 0x0C);
+# li r3,7 0x38600007; blr 0x4E800020.
+
+[[case]]
+name = "bdzlr_falls_through_while_count_remains"
+mnemonic = "li"
+source = "PowerPC ISA Book I, BO field: 1z1zz is branch-always; 1z01y (bdz) and 1z00y (bdnz) decrement and test CTR. xenia src/xenia/cpu/ppc/ppc_emit_control.cc InstrEmit_bclrx"
+analyze = true
+# li r0,3; mtctr r0; stb r4,0(r6); bdzlr-; stb r4,1(r6); bdzlr-; stb r4,2(r6)
+insns = [0x38000003, 0x7C0903A6, 0x98860000, 0x4F400020, 0x98860001, 0x4F400020, 0x98860002]
+[case.in]
+r4 = 0x5A
+r6 = 0x10001000
+mem = [ { addr = 0x10001000, bytes = "ee ee ee ee" } ]
+[case.out]
+ctr = 1
+mem = [ { addr = 0x10001000, bytes = "5a 5a 5a ee" } ]
+
+[[case]]
+name = "bdzlr_returns_when_count_reaches_zero"
+source = "PowerPC ISA Book I, BO field: 1z1zz is branch-always; 1z01y (bdz) and 1z00y (bdnz) decrement and test CTR. xenia src/xenia/cpu/ppc/ppc_emit_control.cc InstrEmit_bclrx"
+analyze = true
+insns = [0x38000001, 0x7C0903A6, 0x98860000, 0x4F400020, 0x98860001, 0x4F400020, 0x98860002]
+[case.in]
+r4 = 0x5A
+r6 = 0x10001000
+mem = [ { addr = 0x10001000, bytes = "ee ee ee ee" } ]
+[case.out]
+ctr = 0
+mem = [ { addr = 0x10001000, bytes = "5a ee ee ee" } ]
+
+[[case]]
+name = "bdnzlr_falls_through_when_count_reaches_zero"
+source = "PowerPC ISA Book I, BO field: 1z1zz is branch-always; 1z01y (bdz) and 1z00y (bdnz) decrement and test CTR. xenia src/xenia/cpu/ppc/ppc_emit_control.cc InstrEmit_bclrx"
+analyze = true
+# li r0,1; mtctr r0; stb r4,0(r6); bdnzlr; stb r4,1(r6)
+insns = [0x38000001, 0x7C0903A6, 0x98860000, 0x4E000020, 0x98860001]
+[case.in]
+r4 = 0x5A
+r6 = 0x10001000
+mem = [ { addr = 0x10001000, bytes = "ee ee ee ee" } ]
+[case.out]
+ctr = 0
+mem = [ { addr = 0x10001000, bytes = "5a 5a ee ee" } ]
+
+[[case]]
+name = "bdnzlr_returns_while_count_remains"
+source = "PowerPC ISA Book I, BO field: 1z1zz is branch-always; 1z01y (bdz) and 1z00y (bdnz) decrement and test CTR. xenia src/xenia/cpu/ppc/ppc_emit_control.cc InstrEmit_bclrx"
+analyze = true
+insns = [0x38000002, 0x7C0903A6, 0x98860000, 0x4E000020, 0x98860001]
+[case.in]
+r4 = 0x5A
+r6 = 0x10001000
+mem = [ { addr = 0x10001000, bytes = "ee ee ee ee" } ]
+[case.out]
+ctr = 1
+mem = [ { addr = 0x10001000, bytes = "5a ee ee ee" } ]
+
+[[case]]
+name = "beqlr_taken_returns"
+source = "PowerPC ISA Book I, BO field: 1z1zz is branch-always; 1z01y (bdz) and 1z00y (bdnz) decrement and test CTR. xenia src/xenia/cpu/ppc/ppc_emit_control.cc InstrEmit_bclrx; BO 0x0C has bit 0x10 clear and was already conditional"
+analyze = true
+# cmpwi r3,0; beqlr; li r3,7
+insns = [0x2C030000, 0x4D820020, 0x38600007]
+[case.in]
+r3 = 0
+[case.out]
+r3 = 0
+
+[[case]]
+name = "beqlr_not_taken_falls_through"
+source = "PowerPC ISA Book I, BO field: 1z1zz is branch-always; 1z01y (bdz) and 1z00y (bdnz) decrement and test CTR. xenia src/xenia/cpu/ppc/ppc_emit_control.cc InstrEmit_bclrx"
+analyze = true
+insns = [0x2C030000, 0x4D820020, 0x38600007]
+[case.in]
+r3 = 1
+[case.out]
+r3 = 7
+
+[[case]]
+name = "blr_still_ends_the_function"
+source = "PowerPC ISA Book I, BO field: 1z1zz is branch-always; 1z01y (bdz) and 1z00y (bdnz) decrement and test CTR. xenia src/xenia/cpu/ppc/ppc_emit_control.cc InstrEmit_bclrx; the implicit blr after a case plus an explicit one: the analyzer must stop at the first"
+analyze = true
+# li r3,1; blr; li r3,2
+insns = [0x38600001, 0x4E800020, 0x38600002]
+[case.in]
+r3 = 0
+[case.out]
+r3 = 1
+
+[[case]]
+name = "crt_memset_len_258_align_1"
+source = "Halo Wars CRT memset at 0x823BE050 (40 words, verbatim); PowerPC ISA Book I, BO field: 1z1zz is branch-always; 1z01y (bdz) and 1z00y (bdnz) decrement and test CTR. xenia src/xenia/cpu/ppc/ppc_emit_control.cc InstrEmit_bclrx"
+analyze = true
+insns = [0x38050001, 0x7C0903A6, 0x60660000, 0x48000010, 0x38A5FFFF, 0x98860000, 0x38C60001, 0x70C00003, 0x4002FFF0, 0x5084442E, 0x54A0E13F, 0x5084801E, 0x41E20020, 0x7C0903A6, 0x90860000, 0x90860004, 0x90860008, 0x9086000C, 0x38C60010, 0x4320FFEC, 0x54A0F7BF, 0x41C20028, 0x7C0903A6, 0x90860000, 0x38C60004, 0x43400018, 0x90860000, 0x38C60004, 0x4340000C, 0x90860000, 0x38C60004, 0x70A00003, 0x7C0903A6, 0x4DE20020, 0x98860000, 0x4F400020, 0x98860001, 0x4F400020, 0x98860002, 0x4E800020]
+[case.in]
+r3 = 0x10001001
+r4 = 0x5A
+r5 = 258
+mem = [ { addr = 0x10001000, bytes = "ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee" } ]
+[case.out]
+mem = [ { addr = 0x10001000, bytes = "ee 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a ee ee ee" } ]
+
+[[case]]
+name = "crt_memset_len_3_align_0"
+source = "Halo Wars CRT memset at 0x823BE050; the 3-byte tail after the first bdzlr-"
+analyze = true
+insns = [0x38050001, 0x7C0903A6, 0x60660000, 0x48000010, 0x38A5FFFF, 0x98860000, 0x38C60001, 0x70C00003, 0x4002FFF0, 0x5084442E, 0x54A0E13F, 0x5084801E, 0x41E20020, 0x7C0903A6, 0x90860000, 0x90860004, 0x90860008, 0x9086000C, 0x38C60010, 0x4320FFEC, 0x54A0F7BF, 0x41C20028, 0x7C0903A6, 0x90860000, 0x38C60004, 0x43400018, 0x90860000, 0x38C60004, 0x4340000C, 0x90860000, 0x38C60004, 0x70A00003, 0x7C0903A6, 0x4DE20020, 0x98860000, 0x4F400020, 0x98860001, 0x4F400020, 0x98860002, 0x4E800020]
+[case.in]
+r3 = 0x10001000
+r4 = 0x5A
+r5 = 3
+mem = [ { addr = 0x10001000, bytes = "ee ee ee ee ee" } ]
+[case.out]
+mem = [ { addr = 0x10001000, bytes = "5a 5a 5a ee ee" } ]

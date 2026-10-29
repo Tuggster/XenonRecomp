@@ -8,6 +8,7 @@
 // that fails at run time with the message, so one group can't block another.
 
 #include "recompiler.h"
+#include <function.h>
 #include <byteswap.h>
 
 #include <cctype>
@@ -670,6 +671,7 @@ namespace
         std::vector<uint32_t> insns;
         std::vector<uint32_t> callee;   // optional second function, laid out after insns (blr implicit)
         bool xfail = false;
+        bool analyze = false;           // size the function with Function::Analyze instead of the word count
         std::string setup;
         std::string checks;
 
@@ -703,13 +705,13 @@ namespace
 
     void parseCase(const toml::table& tbl, GenCase& c)
     {
-        static const char* kKeys[] = { "name", "source", "insns", "callee", "xfail", "mnemonic", "in", "out" };
+        static const char* kKeys[] = { "name", "source", "insns", "callee", "xfail", "analyze", "mnemonic", "in", "out" };
         for (auto&& [key, value] : tbl)
         {
             bool known = false;
             for (auto k : kKeys) known |= key.str() == k;
             if (!known)
-                fail("unknown key '{}' (name, source, insns, callee, xfail, mnemonic, in, out)", key.str());
+                fail("unknown key '{}' (name, source, insns, callee, xfail, analyze, mnemonic, in, out)", key.str());
         }
 
         auto name = tbl["name"].value<std::string>();
@@ -729,6 +731,13 @@ namespace
             auto b = xfail->value<bool>();
             if (!b) fail("xfail must be true or false");
             c.xfail = *b;
+        }
+
+        if (auto analyze = tbl.get("analyze"))
+        {
+            auto b = analyze->value<bool>();
+            if (!b) fail("analyze must be true or false");
+            c.analyze = *b;
         }
 
         c.insns = parseWords(tbl.get("insns"), "insns");
@@ -984,6 +993,13 @@ int main(int argc, char* argv[])
         }
 
         Function fn{ c.base, size };
+        if (c.analyze)
+        {
+            // What XenonRecomp does for a function without a .pdata entry: the analyzer decides
+            // where it ends. Bounded by the case's own words (plus the implicit blr).
+            fn = Function::Analyze(code + offset - size - calleeSize, size, c.base);
+            c.disasm += fmt::format("\nFunction::Analyze: {} of {} words", fn.size / 4, size / 4);
+        }
         size_t before = recompiler.out.size();
         bool recognized = recompiler.Recompile(fn);
         if (recognized && !c.callee.empty())

@@ -657,6 +657,11 @@ bool Recompiler::Recompile(
         println("\tif ({}.u32 == 0) return;", ctr(), insn.operands[0]);
         break;
 
+    case PPC_INST_BDNZLR:
+        println("\t--{}.u64;", ctr());
+        println("\tif ({}.u32 != 0) return;", ctr());
+        break;
+
     case PPC_INST_BDNZ:
         println("\t--{}.u64;", ctr());
         println("\tif ({}.u32 != 0) goto loc_{:X};", ctr(), insn.operands[0]);
