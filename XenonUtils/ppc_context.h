@@ -653,6 +653,27 @@ inline simde__m128 simde_mm_cvtepu32_ps_(simde__m128i src1)
     return simde_mm_blendv_ps(xmm2, simde_mm_castsi128_ps(xmm0), simde_mm_castsi128_ps(src1));
 }
 
+// IEEE binary16 -> binary32 for the four low u16 lanes (vupkd3d128 FLOAT16_2/4).
+// Integer ops plus one exact multiply, so the result is the same on every host and
+// under every flush and rounding mode, and NaN payloads are not quieted. This matches
+// Xenia's half_float::detail::half2float path (EmulateFLOAT16_2/4).
+// Denormals convert exactly, infinities and NaNs keep their sign and payload.
+inline simde__m128 simde_mm_cvtph_ps_(simde__m128i src1)
+{
+    simde__m128i h = simde_mm_cvtepu16_epi32(src1);
+    simde__m128i sign = simde_mm_slli_epi32(simde_mm_and_si128(h, simde_mm_set1_epi32(0x8000)), 16);
+    simde__m128i mag = simde_mm_and_si128(h, simde_mm_set1_epi32(0x7FFF));
+    // Normal: widen the mantissa and rebias the exponent by 127 - 15.
+    simde__m128i f = simde_mm_add_epi32(simde_mm_slli_epi32(mag, 13), simde_mm_set1_epi32(0x38000000));
+    // Inf/NaN: exponent 31 becomes 255.
+    f = simde_mm_add_epi32(f, simde_mm_and_si128(simde_mm_cmpgt_epi32(mag, simde_mm_set1_epi32(0x7BFF)), simde_mm_set1_epi32(0x38000000)));
+    // Zero/denormal: m * 2^-24. The int->float convert and the multiply are exact and the
+    // result is normal or +0, so neither flush mode nor rounding mode can change it.
+    simde__m128 den = simde_mm_mul_ps(simde_mm_cvtepi32_ps(mag), simde_mm_set1_ps(0x1p-24f));
+    f = simde_mm_blendv_epi8(f, simde_mm_castps_si128(den), simde_mm_cmplt_epi32(mag, simde_mm_set1_epi32(0x400)));
+    return simde_mm_castsi128_ps(simde_mm_or_si128(f, sign));
+}
+
 inline simde__m128i simde_mm_perm_epi8_(simde__m128i a, simde__m128i b, simde__m128i c)
 {
     simde__m128i d = simde_mm_set1_epi8(0xF);

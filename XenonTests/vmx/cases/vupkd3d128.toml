@@ -1,0 +1,391 @@
+# vupkd3d128 vd, vb, imm: VX128_3 form, OP 6, xop 2032; type = imm >> 2.
+#
+# Types (xenia src/xenia/cpu/ppc/ppc_emit_altivec.cc InstrEmit_vupkd3d128):
+#   0 D3DCOLOR (imm 0)      1 NORMSHORT2 (imm 4)      2 NORMPACKED32 2_10_10_10 (imm 8)
+#   3 FLOAT16_2 (imm 12)    4 NORMSHORT4 (imm 16)     5 FLOAT16_4 (imm 20)
+#   6 NORMPACKED64 4_20_20_20 (imm 24)
+# Types 0 and 1 are covered by smoke_vupkd3d128.toml. Halo Wars uses types 5
+# (166 sites) and 3 (5 sites).
+#
+# Half-float reference values (IEEE binary16 -> binary32, as half2float does):
+#   3C00 = 1.0 -> 3F800000     3800 = 0.5 -> 3F000000     4200 = 3.0 -> 40400000
+#   4500 = 5.0 -> 40A00000     7BFF = 65504 -> 477FE000   0400 = 2^-14 -> 38800000
+#   0001 = 2^-24 -> 33800000   03FF = 1023*2^-24 -> 387FC000
+#   7C00 = inf -> 7F800000     7E00 = qNaN -> 7FC00000    7C01 = sNaN -> NaN
+#   8000 = -0.0 -> 80000000
+
+# ---------------------------------------------------------------------------
+# FLOAT16_4 (type 5, imm 20): x = half(VB.z >> 16), y = half(VB.z & 0xFFFF),
+#                             z = half(VB.w >> 16), w = half(VB.w & 0xFFFF)
+# ---------------------------------------------------------------------------
+
+[[case]]
+name = "xenia_test_vupkd3d128_float16_4_0"
+mnemonic = "vupkd3d128"
+source = "xenia src/xenia/cpu/ppc/testing/instr_vupkd3d128.s test_vupkd3d128_float16_4_0; x64_seq_vector.cc UNPACK EmitFLOAT16_4 / EmulateFLOAT16_4"
+insns = [0x18741FF0]   # vupkd3d128 v3,v3,20
+[case.in]
+v3 = { u32 = [0xCDCDCDCD, 0xCDCDCDCD, 0x3800B801, 0x3802B803] }
+[case.out]
+v3 = { u32 = [0x3F000000, 0xBF002000, 0x3F004000, 0xBF006000] }
+
+[[case]]
+name = "float16_4_lane_order_ignores_xy"
+mnemonic = "vupkd3d128"
+source = "xenia x64_seq_vector.cc UNPACK EmulateFLOAT16_4: b[i] = half2float(a[VEC128_W(4 + i)]), i.e. PPC halfwords 4..7 (VB.z, VB.w); VB.x and VB.y are not read"
+insns = [0x18741FF0]   # vupkd3d128 v3,v3,20
+[case.in]
+v3 = { u32 = [0xDEADBEEF, 0xCAFEBABE, 0x3C004000, 0x42004500] }
+[case.out]
+v3 = { f32 = [1.0, 2.0, 3.0, 5.0] }
+
+[[case]]
+name = "float16_4_signed_zero"
+mnemonic = "vupkd3d128"
+source = "xenia x64_seq_vector.cc UNPACK EmulateFLOAT16_4 (half2float keeps the sign of zero: 0x8000 -> -0.0f)"
+insns = [0x18741FF0]   # vupkd3d128 v3,v3,20
+[case.in]
+v3 = { u32 = [0, 0, 0x00008000, 0x80000000] }
+[case.out]
+v3 = { u32 = [0x00000000, 0x80000000, 0x80000000, 0x00000000] }
+
+[[case]]
+name = "float16_4_max_and_one"
+mnemonic = "vupkd3d128"
+source = "xenia x64_seq_vector.cc UNPACK EmulateFLOAT16_4 (half2float: 0x7BFF = 65504, the largest finite half)"
+insns = [0x18741FF0]   # vupkd3d128 v3,v3,20
+[case.in]
+v3 = { u32 = [0, 0, 0x7BFFFBFF, 0x3C00BC00] }
+[case.out]
+v3 = { f32 = [65504.0, -65504.0, 1.0, -1.0] }
+
+[[case]]
+name = "float16_4_inf_and_nan"
+mnemonic = "vupkd3d128"
+source = "xenia x64_seq_vector.cc UNPACK EmulateFLOAT16_4 (half2float: exponent 31 -> inf for zero mantissa, NaN otherwise; 0x7E00 is the quiet NaN 0x7FC00000 on every path, 0x7C01 is a signalling NaN whose quieting is host dependent)"
+insns = [0x18741FF0]   # vupkd3d128 v3,v3,20
+[case.in]
+v3 = { u32 = [0, 0, 0x7C00FC00, 0x7E007C01] }
+[case.out]
+v3 = { f32 = ["inf", "-inf", "0x7FC00000", "nan"] }
+
+[[case]]
+name = "float16_4_denormals"
+mnemonic = "vupkd3d128"
+source = "xenia x64_seq_vector.cc UNPACK EmulateFLOAT16_4 (half2float converts half denormals exactly: 0x0001 = 2^-24, 0x03FF = 1023 * 2^-24; 0x0400 is the smallest normal, 2^-14); F16C vcvtph2ps agrees"
+insns = [0x18741FF0]   # vupkd3d128 v3,v3,20
+[case.in]
+v3 = { u32 = [0, 0, 0x00018001, 0x03FF0400] }
+[case.out]
+v3 = { u32 = [0x33800000, 0xB3800000, 0x387FC000, 0x38800000] }
+
+# Same as above, but run after a VMX float op so the recompiler has switched
+# the host into flush mode (FZ|FZ16 on arm64). Half denormals must still
+# convert exactly: Xenia does not flush them on either of its paths.
+[[case]]
+name = "float16_4_denormals_under_flush_mode"
+mnemonic = "vaddfp128"
+source = "xenia x64_seq_vector.cc UNPACK EmulateFLOAT16_4 (half2float, denormals exact); XenonRecomp emits fpscr.enableFlushMode() before vaddfp128"
+insns = [0x14210810, 0x18741FF0]   # vaddfp128 v1,v1,v1 ; vupkd3d128 v3,v3,20
+[case.in]
+v1 = { f32 = [1.0, 1.0, 1.0, 1.0] }
+v3 = { u32 = [0, 0, 0x00018001, 0x03FF0400] }
+[case.out]
+v1 = { f32 = [2.0, 2.0, 2.0, 2.0] }
+v3 = { u32 = [0x33800000, 0xB3800000, 0x387FC000, 0x38800000] }
+
+[[case]]
+name = "float16_4_v63_v0"
+mnemonic = "vupkd3d128"
+source = "xenia test_vupkd3d128_float16_4_0 data with the game's vd=v63, vb=v0 (ppc_instr.h VX128_3 VD128h/VB128h split fields)"
+insns = [0x1BF407F4]   # vupkd3d128 v63,v0,20
+[case.in]
+v0 = { u32 = [0xCDCDCDCD, 0xCDCDCDCD, 0x3800B801, 0x3802B803] }
+[case.out]
+v63 = { u32 = [0x3F000000, 0xBF002000, 0x3F004000, 0xBF006000] }
+v0 = { u32 = [0xCDCDCDCD, 0xCDCDCDCD, 0x3800B801, 0x3802B803] }
+
+[[case]]
+name = "float16_4_v62_v13"
+mnemonic = "vupkd3d128"
+source = "xenia test_vupkd3d128_float16_4_0 data with the game's vd=v62, vb=v13 (VX128_3 split register fields)"
+insns = [0x1BD46FF4]   # vupkd3d128 v62,v13,20
+[case.in]
+v13 = { u32 = [0xCDCDCDCD, 0xCDCDCDCD, 0x3800B801, 0x3802B803] }
+v62 = { u32 = [0x11111111, 0x22222222, 0x33333333, 0x44444444] }
+[case.out]
+v62 = { u32 = [0x3F000000, 0xBF002000, 0x3F004000, 0xBF006000] }
+v13 = { u32 = [0xCDCDCDCD, 0xCDCDCDCD, 0x3800B801, 0x3802B803] }
+
+[[case]]
+name = "float16_4_v44_v62"
+mnemonic = "vupkd3d128"
+source = "xenia EmulateFLOAT16_4 with the game's vd=v44, vb=v62 (VX128_3 split register fields)"
+insns = [0x1994F7F5]   # vupkd3d128 v44,v62,20
+[case.in]
+v62 = { u32 = [0xCDCDCDCD, 0xCDCDCDCD, 0x3C004000, 0x42004500] }
+[case.out]
+v44 = { f32 = [1.0, 2.0, 3.0, 5.0] }
+v62 = { u32 = [0xCDCDCDCD, 0xCDCDCDCD, 0x3C004000, 0x42004500] }
+
+[[case]]
+name = "float16_4_v127_in_place"
+mnemonic = "vupkd3d128"
+source = "xenia EmulateFLOAT16_4 with vd=vb=v127 (both split fields all ones)"
+insns = [0x1BF4FFFF]   # vupkd3d128 v127,v127,20
+[case.in]
+v127 = { u32 = [0xCDCDCDCD, 0xCDCDCDCD, 0x3C004000, 0x42004500] }
+[case.out]
+v127 = { f32 = [1.0, 2.0, 3.0, 5.0] }
+
+# ---------------------------------------------------------------------------
+# FLOAT16_2 (type 3, imm 12): x = half(VB.w >> 16), y = half(VB.w & 0xFFFF),
+#                             z = 0.0, w = 1.0
+# ---------------------------------------------------------------------------
+
+[[case]]
+name = "xenia_test_vupkd3d128_float16_2_0"
+mnemonic = "vupkd3d128"
+source = "xenia src/xenia/cpu/ppc/testing/instr_vupkd3d128.s test_vupkd3d128_float16_2_0; x64_seq_vector.cc UNPACK EmitFLOAT16_2 / EmulateFLOAT16_2"
+insns = [0x186C1FF0]   # vupkd3d128 v3,v3,12
+[case.in]
+v3 = { u32 = [0xCDCDCDCD, 0xCDCDCDCD, 0xCDCDCDCD, 0x3800B800] }
+[case.out]
+v3 = { u32 = [0x3F000000, 0xBF000000, 0x00000000, 0x3F800000] }
+
+[[case]]
+name = "float16_2_lane_order_ignores_xyz"
+mnemonic = "vupkd3d128"
+source = "xenia x64_seq_vector.cc UNPACK EmulateFLOAT16_2: b[i] = half2float(a[VEC128_W(6 + i)]) (PPC halfwords 6, 7 = VB.w), b[2] = 0, b[3] = 1; VB.xyz are not read"
+insns = [0x186C1FF0]   # vupkd3d128 v3,v3,12
+[case.in]
+v3 = { u32 = [0x3C003C00, 0x3C003C00, 0x3C003C00, 0x42004500] }
+[case.out]
+v3 = { f32 = [3.0, 5.0, 0.0, 1.0] }
+
+[[case]]
+name = "float16_2_signed_zero_and_negative"
+mnemonic = "vupkd3d128"
+source = "xenia x64_seq_vector.cc UNPACK EmulateFLOAT16_2 (half2float keeps the sign; z is +0.0 and w is exactly 1.0)"
+insns = [0x186C1FF0]   # vupkd3d128 v3,v3,12
+[case.in]
+v3 = { u32 = [0, 0, 0, 0x8000BC00] }
+[case.out]
+v3 = { u32 = [0x80000000, 0xBF800000, 0x00000000, 0x3F800000] }
+
+[[case]]
+name = "float16_2_inf_and_nan"
+mnemonic = "vupkd3d128"
+source = "xenia x64_seq_vector.cc UNPACK EmulateFLOAT16_2 (half2float: 0x7C00 -> +inf, 0xFE00 -> -qNaN 0xFFC00000)"
+insns = [0x186C1FF0]   # vupkd3d128 v3,v3,12
+[case.in]
+v3 = { u32 = [0, 0, 0, 0x7C00FE00] }
+[case.out]
+v3 = { f32 = ["inf", "0xFFC00000", 0.0, 1.0] }
+
+[[case]]
+name = "float16_2_denormals"
+mnemonic = "vupkd3d128"
+source = "xenia x64_seq_vector.cc UNPACK EmulateFLOAT16_2 (half2float converts half denormals exactly: 0x0001 = 2^-24)"
+insns = [0x186C1FF0]   # vupkd3d128 v3,v3,12
+[case.in]
+v3 = { u32 = [0, 0, 0, 0x00018001] }
+[case.out]
+v3 = { u32 = [0x33800000, 0xB3800000, 0x00000000, 0x3F800000] }
+
+[[case]]
+name = "float16_2_v63_v0"
+mnemonic = "vupkd3d128"
+source = "xenia test_vupkd3d128_float16_2_0 data with the game's vd=v63, vb=v0 (VX128_3 split register fields)"
+insns = [0x1BEC07F4]   # vupkd3d128 v63,v0,12
+[case.in]
+v0 = { u32 = [0xCDCDCDCD, 0xCDCDCDCD, 0xCDCDCDCD, 0x3800B800] }
+[case.out]
+v63 = { u32 = [0x3F000000, 0xBF000000, 0x00000000, 0x3F800000] }
+v0 = { u32 = [0xCDCDCDCD, 0xCDCDCDCD, 0xCDCDCDCD, 0x3800B800] }
+
+[[case]]
+name = "float16_2_v44_v62"
+mnemonic = "vupkd3d128"
+source = "xenia EmulateFLOAT16_2 with the game's vd=v44, vb=v62 (VX128_3 split register fields)"
+insns = [0x198CF7F5]   # vupkd3d128 v44,v62,12
+[case.in]
+v62 = { u32 = [0xCDCDCDCD, 0xCDCDCDCD, 0xCDCDCDCD, 0x42004500] }
+v44 = { u32 = [0x11111111, 0x22222222, 0x33333333, 0x44444444] }
+[case.out]
+v44 = { f32 = [3.0, 5.0, 0.0, 1.0] }
+v62 = { u32 = [0xCDCDCDCD, 0xCDCDCDCD, 0xCDCDCDCD, 0x42004500] }
+
+# ---------------------------------------------------------------------------
+# NORMSHORT2 (type 1, imm 4): the negative-overflow NaN rule. The other
+# SHORT2 cases live in smoke_vupkd3d128.toml.
+# ---------------------------------------------------------------------------
+
+[[case]]
+name = "xenia_test_vupkd3d128_short2_2"
+mnemonic = "vupkd3d128"
+source = "xenia src/xenia/cpu/ppc/testing/instr_vupkd3d128.s test_vupkd3d128_short2_2; x64_seq_vector.cc UNPACK EmitSHORT_2"
+insns = [0x18641FF0]   # vupkd3d128 v3,v3,4
+[case.in]
+v3 = { u32 = [0xCDCDCDCD, 0xCDCDCDCD, 0xCDCDCDCD, 0x7FFFF333] }
+[case.out]
+v3 = { u32 = [0x40407FFF, 0x403FF333, 0x00000000, 0x3F800000] }
+
+[[case]]
+name = "short2_overflow_only_in_x"
+mnemonic = "vupkd3d128"
+source = "xenia x64_seq_vector.cc UNPACK EmitSHORT_2 (vcmpeqps against XMMUnpackSHORT_Overflow 0x403F8000, vblendvps XMMQNaN 0x7FC00000): only the -32768 lane becomes NaN"
+insns = [0x18641FF0]   # vupkd3d128 v3,v3,4
+[case.in]
+v3 = { u32 = [0, 0, 0, 0x80007FFF] }
+[case.out]
+v3 = { u32 = [0x7FC00000, 0x40407FFF, 0x00000000, 0x3F800000] }
+
+# ---------------------------------------------------------------------------
+# NORMSHORT4 (type 4, imm 16): x = 3.0 + s16(VB.z >> 16) * 2^-22,
+#   y = 3.0 + s16(VB.z) * 2^-22, z = 3.0 + s16(VB.w >> 16) * 2^-22,
+#   w = 3.0 + s16(VB.w) * 2^-22; -32768 -> quiet NaN
+# ---------------------------------------------------------------------------
+
+[[case]]
+name = "xenia_test_vupkd3d128_short4_0"
+mnemonic = "vupkd3d128"
+source = "xenia src/xenia/cpu/ppc/testing/instr_vupkd3d128.s test_vupkd3d128_short4_0; x64_seq_vector.cc UNPACK EmitSHORT_4"
+insns = [0x18701FF0]   # vupkd3d128 v3,v3,16
+[case.in]
+v3 = { u32 = [0xCDCDCDCD, 0xCDCDCDCD, 0x7FFFFFFF, 0x007FFFF8] }
+[case.out]
+v3 = { u32 = [0x40407FFF, 0x403FFFFF, 0x4040007F, 0x403FFFF8] }
+
+[[case]]
+name = "short4_zero_and_overflow_lanes"
+mnemonic = "vupkd3d128"
+source = "xenia x64_seq_vector.cc UNPACK EmitSHORT_4 (vpaddd XMM3333; vcmpeqps XMMUnpackSHORT_Overflow 0x403F8000 -> XMMQNaN per lane)"
+insns = [0x18701FF0]   # vupkd3d128 v3,v3,16
+[case.in]
+v3 = { u32 = [0xCDCDCDCD, 0xCDCDCDCD, 0x80000000, 0x00018000] }
+[case.out]
+v3 = { u32 = [0x7FC00000, 0x40400000, 0x40400001, 0x7FC00000] }
+
+[[case]]
+name = "short4_v5_v9"
+mnemonic = "vupkd3d128"
+source = "xenia test_vupkd3d128_short4_0 data with vd=v5, vb=v9"
+insns = [0x18B04FF0]   # vupkd3d128 v5,v9,16
+[case.in]
+v9 = { u32 = [0xCDCDCDCD, 0xCDCDCDCD, 0x7FFFFFFF, 0x007FFFF8] }
+[case.out]
+v5 = { u32 = [0x40407FFF, 0x403FFFFF, 0x4040007F, 0x403FFFF8] }
+v9 = { u32 = [0xCDCDCDCD, 0xCDCDCDCD, 0x7FFFFFFF, 0x007FFFF8] }
+
+# ---------------------------------------------------------------------------
+# NORMPACKED32 2_10_10_10 (type 2, imm 8), packed w_z_y_x in VB.w:
+#   x = 3.0 + s10(w[9:0]) * 2^-22, y = 3.0 + s10(w[19:10]) * 2^-22,
+#   z = 3.0 + s10(w[29:20]) * 2^-22, w = 1.0 + u2(w[31:30]) * 2^-23;
+#   -512 -> quiet NaN
+# ---------------------------------------------------------------------------
+
+[[case]]
+name = "xenia_test_vupkd3d128_uint_2101010_0"
+mnemonic = "vupkd3d128"
+source = "xenia src/xenia/cpu/ppc/testing/instr_vupkd3d128.s test_vupkd3d128_uint_2101010_0; x64_seq_vector.cc UNPACK EmitUINT_2101010"
+insns = [0x18681FF0]   # vupkd3d128 v3,v3,8
+[case.in]
+v3 = { u32 = [0xCDCDCDCD, 0xCDCDCDCD, 0xCDCDCDCD, 0x400001FF] }
+[case.out]
+v3 = { u32 = [0x404001FF, 0x40400000, 0x40400000, 0x3F800001] }
+
+[[case]]
+name = "xenia_test_vupkd3d128_uint_2101010_1"
+mnemonic = "vupkd3d128"
+source = "xenia src/xenia/cpu/ppc/testing/instr_vupkd3d128.s test_vupkd3d128_uint_2101010_1; x64_seq_vector.cc UNPACK EmitUINT_2101010"
+insns = [0x18681FF0]   # vupkd3d128 v3,v3,8
+[case.in]
+v3 = { u32 = [0xCDCDCDCD, 0xCDCDCDCD, 0xCDCDCDCD, 0x40000201] }
+[case.out]
+v3 = { u32 = [0x403FFE01, 0x40400000, 0x40400000, 0x3F800001] }
+
+[[case]]
+name = "xenia_test_vupkd3d128_uint_2101010_2"
+mnemonic = "vupkd3d128"
+source = "xenia src/xenia/cpu/ppc/testing/instr_vupkd3d128.s test_vupkd3d128_uint_2101010_2; x64_seq_vector.cc UNPACK EmitUINT_2101010 (XMMUnpackUINT_2101010_Overflow 0x403FFE00 -> XMMQNaN)"
+insns = [0x18681FF0]   # vupkd3d128 v3,v3,8
+[case.in]
+v3 = { u32 = [0xCDCDCDCD, 0xCDCDCDCD, 0xCDCDCDCD, 0x40000200] }
+[case.out]
+v3 = { u32 = [0x7FC00000, 0x40400000, 0x40400000, 0x3F800001] }
+
+[[case]]
+name = "uint_2101010_zero"
+mnemonic = "vupkd3d128"
+source = "xenia x64_seq_vector.cc UNPACK EmitUINT_2101010 (constant-zero fast path returns XMM3331 = 3, 3, 3, 1)"
+insns = [0x18681FF0]   # vupkd3d128 v3,v3,8
+[case.in]
+v3 = { u32 = [0xCDCDCDCD, 0xCDCDCDCD, 0xCDCDCDCD, 0x00000000] }
+[case.out]
+v3 = { f32 = [3.0, 3.0, 3.0, 1.0] }
+
+[[case]]
+name = "uint_2101010_all_ones"
+mnemonic = "vupkd3d128"
+source = "xenia x64_seq_vector.cc UNPACK EmitUINT_2101010 (xyz sign-extended from 10 bits: 0x3FF = -1; w unsigned 2 bits: 3)"
+insns = [0x18681FF0]   # vupkd3d128 v3,v3,8
+[case.in]
+v3 = { u32 = [0, 0, 0, 0xFFFFFFFF] }
+[case.out]
+v3 = { u32 = [0x403FFFFF, 0x403FFFFF, 0x403FFFFF, 0x3F800003] }
+
+[[case]]
+name = "uint_2101010_lane_fields"
+mnemonic = "vupkd3d128"
+source = "xenia x64_seq_vector.cc UNPACK EmitUINT_2101010 (XMMPackUINT_2101010_MaskPacked / _Shift 0, 10, 20, 30): x = 2, y = -2 (0x3FE), z = 511 (0x1FF), w = 2"
+insns = [0x18A84FF0]   # vupkd3d128 v5,v9,8
+[case.in]
+v9 = { u32 = [0xCDCDCDCD, 0xCDCDCDCD, 0xCDCDCDCD, 0x9FFFF802] }
+[case.out]
+v5 = { u32 = [0x40400002, 0x403FFFFE, 0x404001FF, 0x3F800002] }
+v9 = { u32 = [0xCDCDCDCD, 0xCDCDCDCD, 0xCDCDCDCD, 0x9FFFF802] }
+
+# ---------------------------------------------------------------------------
+# NORMPACKED64 4_20_20_20 (type 6, imm 24), packed w_z_y_x in the 64-bit
+# value V = VB.z:VB.w (VB.z high):
+#   x = 3.0 + s20(V[19:0]) * 2^-22, y = 3.0 + s20(V[39:20]) * 2^-22,
+#   z = 3.0 + s20(V[59:40]) * 2^-22, w = 1.0 + u4(V[63:60]) * 2^-23;
+#   -524288 -> quiet NaN
+# Xenia has no .s test for this type; the expectations below are worked by
+# hand from the x64 sequence (XMMUnpackULONG_4202020_Permute, vpsrld 4,
+# vshufps, vpslld/vpsrad 12, vpaddd XMM3331, XMMUnpackULONG_4202020_Overflow
+# 0x40380000) and cross-checked against the pack-side saturation constants
+# XMMPackULONG_4202020_MinUnpacked 0x40380001 / MaxUnpacked 0x4047FFFF.
+# ---------------------------------------------------------------------------
+
+[[case]]
+name = "ulong_4202020_zero"
+mnemonic = "vupkd3d128"
+source = "xenia x64_seq_vector.cc UNPACK EmitULONG_4202020 (constant-zero fast path returns XMM3331 = 3, 3, 3, 1)"
+insns = [0x18781FF0]   # vupkd3d128 v3,v3,24
+[case.in]
+v3 = { u32 = [0xCDCDCDCD, 0xCDCDCDCD, 0, 0] }
+[case.out]
+v3 = { f32 = [3.0, 3.0, 3.0, 1.0] }
+
+[[case]]
+name = "ulong_4202020_lane_fields"
+mnemonic = "vupkd3d128"
+source = "xenia x64_seq_vector.cc UNPACK EmitULONG_4202020, worked by hand: x = 2, y = -2 (0xFFFFE), z = 524287 (0x7FFFF, = XMMPackULONG_4202020_MaxUnpacked 0x4047FFFF), w = 15"
+insns = [0x18781FF0]   # vupkd3d128 v3,v3,24
+[case.in]
+v3 = { u32 = [0xCDCDCDCD, 0xCDCDCDCD, 0xF7FFFFFF, 0xFFE00002] }
+[case.out]
+v3 = { u32 = [0x40400002, 0x403FFFFE, 0x4047FFFF, 0x3F80000F] }
+
+[[case]]
+name = "ulong_4202020_min_and_overflow"
+mnemonic = "vupkd3d128"
+source = "xenia x64_seq_vector.cc UNPACK EmitULONG_4202020, worked by hand: x = -524287 (0x80001, = XMMPackULONG_4202020_MinUnpacked 0x40380001), y = -524288 (0x80000 -> XMMUnpackULONG_4202020_Overflow -> XMMQNaN), z = 1, w = 0"
+insns = [0x18B84FF0]   # vupkd3d128 v5,v9,24
+[case.in]
+v9 = { u32 = [0xCDCDCDCD, 0xCDCDCDCD, 0x00000180, 0x00080001] }
+[case.out]
+v5 = { u32 = [0x40380001, 0x7FC00000, 0x40400001, 0x3F800000] }
+v9 = { u32 = [0xCDCDCDCD, 0xCDCDCDCD, 0x00000180, 0x00080001] }
