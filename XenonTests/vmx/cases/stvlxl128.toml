@@ -1,0 +1,93 @@
+# stvlxl128: store vector left indexed, LRU hint (VMX128 form). Identical to
+# stvlx128: EA = (RA|0) + RB, eb = EA & 0xF; vector bytes 0..(15-eb) are stored
+# at EA..(EA|0xF), i.e. only the part of the vector that fits in the quadword
+# EA lies in. Nothing before EA or past the quadword is touched.
+# Xenia: InstrEmit_stvlxl128 -> InstrEmit_stvlx128 -> InstrEmit_stvlx_
+# (old & ~mask | (new >> eb) & mask, mask = FFFF.. >> eb). Halo Wars has 64
+# sites, all RA != 0 and VS >= 64 (e.g. stvlxl128 v99,r10,r11).
+# Expectations are xenia's testing/instr_stvl.s test_stvlx_1/_2 applied to the
+# 128 LRU form, plus the eb = 15 and eb = 8 edges.
+#
+# Words from encode.py:
+#   0x10640703 stvlxl128 v3,r4,r0     0x12055F0B stvlxl128 v80,r5,r11
+#   0x13E0270F stvlxl128 v127,r0,r4
+
+[[case]]
+name = "xenia_test_stvlx_1_aligned"
+mnemonic = "stvlxl128"
+source = "xenia src/xenia/cpu/ppc/testing/instr_stvl.s test_stvlx_1; ppc_emit_altivec.cc InstrEmit_stvlxl128 -> InstrEmit_stvlx_"
+insns = [0x10640703]   # stvlxl128 v3,r4,r0
+[case.in]
+r4 = 0x10001040
+v3 = { u32 = [0xBE74FCBD, 0xBD912ABA, 0xBF317BBB, 0xBF2D135F] }
+mem = [
+  { addr = 0x10001030, bytes = "00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00" },
+  { addr = 0x10001040, bytes = "00 00 00 00 00 00 00 00 00 00 00 00 3f 80 00 00" },
+  { addr = 0x10001050, bytes = "00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00" },
+]
+[case.out]
+r4 = 0x10001040
+v3 = { u32 = [0xBE74FCBD, 0xBD912ABA, 0xBF317BBB, 0xBF2D135F] }
+mem = [
+  { addr = 0x10001030, bytes = "00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00" },
+  { addr = 0x10001040, bytes = "be 74 fc bd bd 91 2a ba bf 31 7b bb bf 2d 13 5f" },
+  { addr = 0x10001050, bytes = "00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00" },
+]
+
+[[case]]
+name = "xenia_test_stvlx_2_offset_4"
+mnemonic = "stvlxl128"
+source = "xenia src/xenia/cpu/ppc/testing/instr_stvl.s test_stvlx_2 (EA = 0x10001044: 12 bytes stored, first 4 of the quadword kept)"
+insns = [0x10640703]   # stvlxl128 v3,r4,r0
+[case.in]
+r4 = 0x10001044
+v3 = { u32 = [0xF0F1F2F3, 0xF4F5F6F7, 0xF8F9FAFB, 0xFCFDFEFF] }
+mem = [
+  { addr = 0x10001040, bytes = "00 01 02 03 04 05 06 07 08 09 0a 0b 0c 0d 0e 0f" },
+  { addr = 0x10001050, bytes = "00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00" },
+]
+[case.out]
+r4 = 0x10001044
+v3 = { u32 = [0xF0F1F2F3, 0xF4F5F6F7, 0xF8F9FAFB, 0xFCFDFEFF] }
+mem = [
+  { addr = 0x10001040, bytes = "00 01 02 03 f0 f1 f2 f3 f4 f5 f6 f7 f8 f9 fa fb" },
+  { addr = 0x10001050, bytes = "00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00" },
+]
+
+[[case]]
+name = "offset_15_stores_one_byte_ra_plus_rb"
+mnemonic = "stvlxl128"
+source = "xenia src/xenia/cpu/ppc/ppc_emit_altivec.cc InstrEmit_stvlx_ with eb = 15: mask = FFFF.. >> 15 keeps only the last byte; CalculateEA_0 with RA != 0"
+insns = [0x12055F0B]   # stvlxl128 v80,r5,r11  (the Halo Wars form)
+[case.in]
+r5 = 0x10001000
+r11 = 0x4F            # EA = 0x1000104F
+v80 = { u32 = [0xF0F1F2F3, 0xF4F5F6F7, 0xF8F9FAFB, 0xFCFDFEFF] }
+mem = [
+  { addr = 0x10001040, bytes = "00 01 02 03 04 05 06 07 08 09 0a 0b 0c 0d 0e 0f" },
+  { addr = 0x10001050, bytes = "10 11 12 13 14 15 16 17 18 19 1a 1b 1c 1d 1e 1f" },
+]
+[case.out]
+mem = [
+  { addr = 0x10001040, bytes = "00 01 02 03 04 05 06 07 08 09 0a 0b 0c 0d 0e f0" },
+  { addr = 0x10001050, bytes = "10 11 12 13 14 15 16 17 18 19 1a 1b 1c 1d 1e 1f" },
+]
+
+[[case]]
+name = "offset_8_v127_ra0"
+mnemonic = "stvlxl128"
+source = "xenia src/xenia/cpu/ppc/ppc_emit_altivec.cc InstrEmit_stvlx_ with eb = 8: upper half of the quadword gets vector bytes 0..7; VS128 = 127 exercises the split field"
+insns = [0x13E0270F]   # stvlxl128 v127,r0,r4
+[case.in]
+r4 = 0x10001048
+v127 = { u32 = [0xF0F1F2F3, 0xF4F5F6F7, 0xF8F9FAFB, 0xFCFDFEFF] }
+mem = [
+  { addr = 0x10001040, bytes = "00 01 02 03 04 05 06 07 08 09 0a 0b 0c 0d 0e 0f" },
+  { addr = 0x10001050, bytes = "00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00" },
+]
+[case.out]
+v127 = { u32 = [0xF0F1F2F3, 0xF4F5F6F7, 0xF8F9FAFB, 0xFCFDFEFF] }
+mem = [
+  { addr = 0x10001040, bytes = "00 01 02 03 04 05 06 07 f0 f1 f2 f3 f4 f5 f6 f7" },
+  { addr = 0x10001050, bytes = "00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00" },
+]

@@ -1,0 +1,53 @@
+# dcbst: data cache block store. A cache-maintenance hint (write the 128-byte
+# line containing EA back to memory) with no architecturally visible effect in
+# a recompiler: memory and registers are untouched and no address is
+# dereferenced. Xenia: ppc_emit_memory.cc InstrEmit_dcbst ->
+# CacheControl(ea, 128, DATA_STORE), which the x64 backend lowers to nothing.
+# Same treatment as XenonRecomp's dcbf/dcbt/dcbtst (no op). Halo Wars has 3
+# sites, all in 128-byte stride flush loops: dcbst r0,r11 and dcbst r11,r10
+# followed by addi r11,r11,128.
+#
+# X-form words (op 31, xo 54): (31<<26)|(ra<<16)|(rb<<11)|(54<<1)
+#   0x7C00586C dcbst r0,r11    0x7C0B506C dcbst r11,r10
+
+[[case]]
+name = "ra0_leaves_memory_and_registers_alone"
+mnemonic = "dcbst"
+source = "xenia src/xenia/cpu/ppc/ppc_emit_memory.cc InstrEmit_dcbst (CacheControl DATA_STORE, no data effect)"
+insns = [0x7C00586C]   # dcbst r0,r11
+[case.in]
+r11 = 0x10001040
+r0 = 0xDEADBEEF
+mem = [ { addr = 0x10001000, bytes = "00 01 02 03 04 05 06 07 08 09 0a 0b 0c 0d 0e 0f" },
+        { addr = 0x10001040, bytes = "f0 f1 f2 f3 f4 f5 f6 f7 f8 f9 fa fb fc fd fe ff" },
+        { addr = 0x10001080, bytes = "00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00" } ]
+[case.out]
+r11 = 0x10001040
+r0 = 0xDEADBEEF
+mem = [ { addr = 0x10001000, bytes = "00 01 02 03 04 05 06 07 08 09 0a 0b 0c 0d 0e 0f" },
+        { addr = 0x10001040, bytes = "f0 f1 f2 f3 f4 f5 f6 f7 f8 f9 fa fb fc fd fe ff" },
+        { addr = 0x10001080, bytes = "00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00" } ]
+
+[[case]]
+name = "ra_plus_rb_unaligned_in_line"
+mnemonic = "dcbst"
+source = "xenia src/xenia/cpu/ppc/ppc_emit_memory.cc InstrEmit_dcbst with CalculateEA_0 (RA != 0); EA = 0x10001077 mid-line, nothing changes"
+insns = [0x7C0B506C]   # dcbst r11,r10
+[case.in]
+r11 = 0x10001000
+r10 = 0x77
+mem = [ { addr = 0x10001070, bytes = "11 22 33 44 55 66 77 88 99 aa bb cc dd ee ff 00" } ]
+[case.out]
+r11 = 0x10001000
+r10 = 0x77
+mem = [ { addr = 0x10001070, bytes = "11 22 33 44 55 66 77 88 99 aa bb cc dd ee ff 00" } ]
+
+[[case]]
+name = "flush_loop_step_no_fault_at_top_of_memory"
+mnemonic = "dcbst"
+source = "xenia src/xenia/cpu/ppc/ppc_emit_memory.cc InstrEmit_dcbst; the Halo Wars loop body (dcbst r0,r11 ; addi r11,r11,128), EA in the last 128-byte line of the 4 GiB space"
+insns = [0x7C00586C, 0x396B0080]   # dcbst r0,r11 ; addi r11,r11,128
+[case.in]
+r11 = 0xFFFFFF80
+[case.out]
+r11 = 0x100000000   # addi is 64-bit; dcbst did not touch r11

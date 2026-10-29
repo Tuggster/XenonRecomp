@@ -1,0 +1,154 @@
+# bdnzt BI,target: bc with BO = 0b01000. CTR <- CTR - 1 (64-bit) first, in
+# every case; then branch iff CTR[32:63] != 0 AND CR bit BI is set. Xenia:
+# ppc_emit_control.cc InstrEmit_bcx with BO[2] = 0 (decrement, ctr_ok =
+# IsTrue(Truncate(ctr, INT32))), BO[1] = 0, BO[4] = 0, BO[3] = 1 (expect
+# CR[BI] true). Halo Wars has 2 sites, both in memcmp-style loops with BI =
+# eq (cr0) and a backward target that is also reached from elsewhere:
+#   cmpd r5,r6 ; bdnzt eq,0x825ecbb4   and   cmpw r5,r6 ; bdnzt eq,0x825ecc00
+#
+# B-form words: (16<<26)|(BO<<21)|(BI<<16)|(BD & 0xFFFC), BO = 8
+#   0x41020008 bdnzt eq,+8 (BI=2)         0x41190008 bdnzt 4*cr6+gt,+8 (BI=25)
+#   0x4100FFF8 bdnzt lt,-8 (BI=0)
+#   0x38600001 li r3,1   0x38800001 li r4,1   0x38630001 addi r3,r3,1
+#   0x7C033040 cmplw r3,r6
+#
+# Forward shape: insns[0] bdnzt +8 skips "li r3,1" when taken; "li r4,1" at the
+# target always runs, so r4 = 1 proves the label was reached either way.
+
+[[case]]
+name = "ctr_nonzero_and_cr_true_branches"
+mnemonic = "bdnzt"
+source = "xenia src/xenia/cpu/ppc/ppc_emit_control.cc InstrEmit_bcx: ctr_ok (ctr-1 != 0) && cond_ok (CR[BI] == 1)"
+insns = [0x41020008, 0x38600001, 0x38800001]   # bdnzt eq,+8 ; li r3,1 ; li r4,1
+[case.in]
+ctr = 2
+cr0 = "eq"
+[case.out]
+ctr = 1
+r3 = 0          # skipped
+r4 = 1
+cr0 = "eq"      # bc does not write CR
+
+[[case]]
+name = "ctr_reaches_zero_and_cr_true_falls_through"
+mnemonic = "bdnzt"
+source = "xenia src/xenia/cpu/ppc/ppc_emit_control.cc InstrEmit_bcx: CTR decremented to 0 -> ctr_ok false even though CR[BI] is set"
+insns = [0x41020008, 0x38600001, 0x38800001]
+[case.in]
+ctr = 1
+cr0 = "eq"
+[case.out]
+ctr = 0
+r3 = 1
+r4 = 1
+
+[[case]]
+name = "ctr_nonzero_and_cr_false_falls_through_still_decrements"
+mnemonic = "bdnzt"
+source = "xenia src/xenia/cpu/ppc/ppc_emit_control.cc InstrEmit_bcx: CTR is decremented regardless of the condition; cond_ok false -> no branch"
+insns = [0x41020008, 0x38600001, 0x38800001]
+[case.in]
+ctr = 2
+cr0 = "lt|gt|so"   # everything but eq
+[case.out]
+ctr = 1
+r3 = 1
+r4 = 1
+
+[[case]]
+name = "ctr_reaches_zero_and_cr_false_falls_through"
+mnemonic = "bdnzt"
+source = "xenia src/xenia/cpu/ppc/ppc_emit_control.cc InstrEmit_bcx: both ctr_ok and cond_ok false"
+insns = [0x41020008, 0x38600001, 0x38800001]
+[case.in]
+ctr = 1
+cr0 = ""
+[case.out]
+ctr = 0
+r3 = 1
+r4 = 1
+
+[[case]]
+name = "ctr_zero_wraps_and_branches"
+mnemonic = "bdnzt"
+source = "xenia src/xenia/cpu/ppc/ppc_emit_control.cc InstrEmit_bcx: Sub(ctr, 1) on 64 bits wraps 0 to all ones; low 32 bits != 0 -> ctr_ok"
+insns = [0x41020008, 0x38600001, 0x38800001]
+[case.in]
+ctr = 0
+cr0 = "eq"
+[case.out]
+ctr = "0xFFFFFFFFFFFFFFFF"
+r3 = 0
+r4 = 1
+
+[[case]]
+name = "only_low_32_bits_of_ctr_are_tested"
+mnemonic = "bdnzt"
+source = "xenia src/xenia/cpu/ppc/ppc_emit_control.cc InstrEmit_bcx: ctr_ok = IsTrue(Truncate(ctr, INT32_TYPE)); 0x1_0000_0001 - 1 has zero low word -> no branch"
+insns = [0x41020008, 0x38600001, 0x38800001]
+[case.in]
+ctr = 0x100000001
+cr0 = "eq"
+[case.out]
+ctr = 0x100000000
+r3 = 1
+r4 = 1
+
+[[case]]
+name = "bi_selects_cr6_gt_not_cr0"
+mnemonic = "bdnzt"
+source = "xenia src/xenia/cpu/ppc/ppc_emit_control.cc InstrEmit_bcx: LoadCRField(BI >> 2, BI & 3); BI = 25 -> cr6.gt"
+insns = [0x41190008, 0x38600001, 0x38800001]   # bdnzt 4*cr6+gt,+8
+[case.in]
+ctr = 3
+cr0 = "eq"
+cr6 = "gt"
+[case.out]
+ctr = 2
+r3 = 0
+r4 = 1
+cr6 = "gt"
+
+[[case]]
+name = "bi_cr6_gt_clear_falls_through"
+mnemonic = "bdnzt"
+source = "xenia src/xenia/cpu/ppc/ppc_emit_control.cc InstrEmit_bcx: cr6.gt clear -> cond_ok false, even with cr0.eq and cr6.eq/lt set"
+insns = [0x41190008, 0x38600001, 0x38800001]
+[case.in]
+ctr = 3
+cr0 = "eq"
+cr6 = "lt|eq|so"
+[case.out]
+ctr = 2
+r3 = 1
+r4 = 1
+
+# Backward loop, the Halo Wars shape (compare ; bdnzt back): continue while
+# r3 < r6 and CTR > 0. insns[0] is addi, so no mnemonic guard here.
+#   loc: addi r3,r3,1 ; cmplw r3,r6 ; bdnzt lt,loc
+
+[[case]]
+name = "loop_exits_on_ctr"
+source = "xenia src/xenia/cpu/ppc/ppc_emit_control.cc InstrEmit_bcx, backward target; loop runs CTR times while cr0.lt holds"
+insns = [0x38630001, 0x7C033040, 0x4100FFF8]   # addi r3,r3,1 ; cmplw r3,r6 ; bdnzt lt,-8
+[case.in]
+r3 = 0
+r6 = 10
+ctr = 3
+[case.out]
+r3 = 3
+ctr = 0
+cr0 = "lt"
+
+[[case]]
+name = "loop_exits_on_condition_before_ctr"
+source = "xenia src/xenia/cpu/ppc/ppc_emit_control.cc InstrEmit_bcx, backward target; cr0.lt drops when r3 == r6, CTR keeps the remaining count"
+insns = [0x38630001, 0x7C033040, 0x4100FFF8]
+[case.in]
+r3 = 0
+r6 = 2
+ctr = 100
+[case.out]
+r3 = 2
+ctr = 98
+cr0 = "eq"

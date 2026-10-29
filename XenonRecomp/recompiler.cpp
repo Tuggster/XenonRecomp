@@ -668,6 +668,16 @@ bool Recompiler::Recompile(
         println("\tif ({}.u32 != 0 && !{}.eq) goto loc_{:X};", ctr(), cr(insn.operands[0] / 4), insn.operands[1]);
         break;
 
+    case PPC_INST_BDNZT:
+    {
+        // bc with BO=01000: CTR <- CTR - 1; branch if CTR[32:63] != 0 && CR[BI] == 1.
+        // operands[0] is the raw BI (field = BI / 4, bit = BI % 4), unlike bdnzf above this does not assume eq.
+        static constexpr const char* crBits[] = { "lt", "gt", "eq", "so" };
+        println("\t--{}.u64;", ctr());
+        println("\tif ({}.u32 != 0 && {}.{}) goto loc_{:X};", ctr(), cr(insn.operands[0] / 4), crBits[insn.operands[0] % 4], insn.operands[1]);
+        break;
+    }
+
     case PPC_INST_BEQ:
         printConditionalBranch(false, "eq");
         break;
@@ -814,6 +824,10 @@ bool Recompiler::Recompile(
 
     case PPC_INST_DCBF:
         // no op
+        break;
+
+    case PPC_INST_DCBST:
+        // no op (cache hint only; xenia CacheControl DATA_STORE touches nothing architecturally visible)
         break;
 
     case PPC_INST_DCBT:
@@ -1137,6 +1151,14 @@ bool Recompiler::Recompile(
         println("{}.u32);", r(insn.operands[2]));
         break;
 
+    case PPC_INST_LHBRX:
+        // PPC_LOAD_U16 already swaps big-endian memory to host order; swapping again yields the little-endian halfword.
+        print("\t{}.u64 = __builtin_bswap16(PPC_LOAD_U16(", r(insn.operands[0]));
+        if (insn.operands[1] != 0)
+            print("{}.u32 + ", r(insn.operands[1]));
+        println("{}.u32));", r(insn.operands[2]));
+        break;
+
     case PPC_INST_LI:
         println("\t{}.s64 = {};", r(insn.operands[0]), int32_t(insn.operands[1]));
         break;
@@ -1145,10 +1167,15 @@ bool Recompiler::Recompile(
         println("\t{}.s64 = {};", r(insn.operands[0]), int32_t(insn.operands[1] << 16));
         break;
 
+    case PPC_INST_LVEHX:
     case PPC_INST_LVEWX:
     case PPC_INST_LVEWX128:
     case PPC_INST_LVX:
     case PPC_INST_LVX128:
+    case PPC_INST_LVXL:
+    case PPC_INST_LVXL128:
+        // NOTE: lvehx/lvewx load the whole aligned quadword like lvx (xenia InstrEmit_lvehx/lvewx_ do the same;
+        // the architecture leaves the other elements undefined). lvxl is lvx plus an LRU hint.
         // NOTE: for endian swapping, we reverse the whole vector instead of individual elements.
         // this is accounted for in every instruction (eg. dp3 sums yzw instead of xyz)
         print("\tsimde_mm_store_si128((simde__m128i*){}.u8, simde_mm_shuffle_epi8(simde_mm_load_si128((simde__m128i*)(base + ((", v(insn.operands[0]));
@@ -1621,6 +1648,9 @@ bool Recompiler::Recompile(
 
     case PPC_INST_STVLX:
     case PPC_INST_STVLX128:
+    case PPC_INST_STVLXL:
+    case PPC_INST_STVLXL128:
+        // stvlxl is stvlx plus an LRU hint (xenia InstrEmit_stvlxl128 -> InstrEmit_stvlx128).
         // TODO: vectorize
         // NOTE: accounting for the full vector reversal here
         print("\t{} = ", ea());
