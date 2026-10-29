@@ -1,0 +1,366 @@
+# vcmpbfp / vcmpbfp128 (bounds compare), plain and record forms.
+#
+# Reference: xenia src/xenia/cpu/ppc/ppc_emit_altivec.cc InstrEmit_vcmpbfp_, lowered by
+# src/xenia/cpu/backend/x64/x64_seq_vector.cc VECTOR_COMPARE_SGT/SGE FLOAT32 (vcmpgtps /
+# vcmpgeps, both *ordered*) and NEG V128 (vxorps sign mask):
+#   bit 31 (0x80000000) = a > b
+#   bit 30 (0x40000000) = !(a >= -b)
+#   Rc: UpdateCR6(gt | lt) -> cr6.lt = every lane out of bounds, cr6.eq = every lane in
+#       bounds, gt = so = 0 (src/xenia/cpu/ppc/ppc_hir_builder.cc PPCHIRBuilder::UpdateCR6).
+#
+# Known divergences from the AltiVec ISA that these cases pin to Xenia's behaviour:
+#   * NaN: the ISA sets both bits (0xC0000000) when either operand is NaN. Xenia's gt is an
+#     ordered compare, so NaN yields only 0x40000000 (the comment in Xenia's emitter claims
+#     0xC0000000 but the code does not produce it).
+#   * CR6: the ISA defines only eq (= all in bounds) and leaves lt/gt/so clear. Xenia's
+#     UpdateCR6 additionally sets lt when every lane is out of bounds.
+#
+# Encodings (XenonTests/vmx/encode.py): vcmpbfp128[.] vd,va,vb is VX128_R, OP 6, xop 384
+# (448 with Rc). vcmpbfp[.] is the plain VXR form, OP 4, xop 966, Rc at bit 10 (not in
+# encode.py; the word is checked by the `mnemonic` guard).
+
+# ---------------------------------------------------------------------------------------
+# Xenia's own test vectors (src/xenia/cpu/ppc/testing/instr_vcmpxxfp128.s / instr_vcmpxxfp.s).
+# r3 = mfocrf cr6 there: 0x20 = eq, 0x00 = nothing.
+
+[[case]]
+name = "xenia_test_vcmpbfp128_1"
+mnemonic = "vcmpbfp128."
+source = "xenia src/xenia/cpu/ppc/testing/instr_vcmpxxfp128.s test_vcmpbfp128_1 (r3 = 0x20 -> cr6.eq)"
+insns = [0x186429C0]   # vcmpbfp128. v3,v4,v5
+[case.in]
+v4 = { u32 = [0x40A00000, 0x40A00000, 0x40A00000, 0x40A00000] }
+v5 = { u32 = [0x40A00000, 0x40A00000, 0x40A00000, 0x40A00000] }
+[case.out]
+v3 = { u32 = [0, 0, 0, 0] }
+v4 = { u32 = [0x40A00000, 0x40A00000, 0x40A00000, 0x40A00000] }
+v5 = { u32 = [0x40A00000, 0x40A00000, 0x40A00000, 0x40A00000] }
+cr6 = "eq"
+
+[[case]]
+name = "xenia_test_vcmpbfp128_2"
+mnemonic = "vcmpbfp128."
+source = "xenia src/xenia/cpu/ppc/testing/instr_vcmpxxfp128.s test_vcmpbfp128_2 (r3 = 0x20 -> cr6.eq)"
+insns = [0x186429C0]   # vcmpbfp128. v3,v4,v5
+[case.in]
+v4 = { u32 = [0xC0A00000, 0xC0A00000, 0xC0A00000, 0xC0A00000] }
+v5 = { u32 = [0x40A00000, 0x40A00000, 0x40A00000, 0x40A00000] }
+[case.out]
+v3 = { u32 = [0, 0, 0, 0] }
+cr6 = "eq"
+
+[[case]]
+name = "xenia_test_vcmpbfp128_3"
+mnemonic = "vcmpbfp128."
+source = "xenia src/xenia/cpu/ppc/testing/instr_vcmpxxfp128.s test_vcmpbfp128_3 (r3 = 0 -> cr6 clear)"
+insns = [0x186429C0]   # vcmpbfp128. v3,v4,v5
+[case.in]
+v4 = { u32 = [0x40E00000, 0xC0E00000, 0x40A00000, 0x40A00000] }
+v5 = { u32 = [0x40A00000, 0x40A00000, 0x40A00000, 0x40A00000] }
+[case.out]
+v3 = { u32 = [0x80000000, 0x40000000, 0, 0] }
+cr6 = ""
+
+[[case]]
+name = "xenia_test_vcmpbfp_3_vxr_record"
+mnemonic = "vcmpbfp."
+source = "xenia src/xenia/cpu/ppc/testing/instr_vcmpxxfp.s test_vcmpbfp_3 (plain VXR form, same emitter InstrEmit_vcmpbfp_)"
+insns = [0x10642FC6]   # vcmpbfp. v3,v4,v5  = VXR(4, 966, 1) | 3<<21 | 4<<16 | 5<<11
+[case.in]
+v4 = { f32 = [7.0, -7.0, 5.0, 5.0] }
+v5 = { f32 = [5.0, 5.0, 5.0, 5.0] }
+[case.out]
+v3 = { u32 = [0x80000000, 0x40000000, 0, 0] }
+cr6 = ""
+
+[[case]]
+name = "vcmpbfp_vxr_non_record_leaves_cr6"
+mnemonic = "vcmpbfp"
+source = "xenia src/xenia/cpu/ppc/ppc_emit_altivec.cc InstrEmit_vcmpbfp_: UpdateCR6 only when rc"
+insns = [0x10642BC6]   # vcmpbfp v3,v4,v5  = VXR(4, 966, 0) | 3<<21 | 4<<16 | 5<<11
+[case.in]
+v4 = { f32 = [7.0, -7.0, 5.0, 5.0] }
+v5 = { f32 = [5.0, 5.0, 5.0, 5.0] }
+cr6 = "lt|gt|eq|so"
+[case.out]
+v3 = { u32 = [0x80000000, 0x40000000, 0, 0] }
+cr6 = "lt|gt|eq|so"
+
+# ---------------------------------------------------------------------------------------
+# Bounds and CR6 outcomes.
+
+[[case]]
+name = "all_in_bounds_sets_cr6_eq"
+mnemonic = "vcmpbfp128."
+source = "xenia src/xenia/cpu/ppc/ppc_emit_altivec.cc InstrEmit_vcmpbfp_: gt = a > b -> 0x80000000, lt = !(a >= -b) -> 0x40000000; Rc: UpdateCR6(gt | lt) -> cr6.eq (none set) / cr6.lt (all set)"
+insns = [0x180111C0]   # vcmpbfp128. v0,v1,v2
+[case.in]
+v1 = { f32 = [1.0, -1.0, 0.5, 2.0] }
+v2 = { f32 = [2.0, 2.0, 2.0, 2.0] }
+[case.out]
+v0 = { u32 = [0, 0, 0, 0] }
+cr6 = { lt = 0, gt = 0, eq = 1, so = 0 }
+
+[[case]]
+name = "boundary_equal_is_in_bounds"
+mnemonic = "vcmpbfp128."
+source = "xenia InstrEmit_vcmpbfp_: a == b is not a > b, a == -b satisfies a >= -b, so both edges are in bounds"
+insns = [0x180111C0]   # vcmpbfp128. v0,v1,v2
+[case.in]
+v1 = { f32 = [2.0, -2.0, 2.0, -2.0] }
+v2 = { f32 = [2.0, 2.0, 2.0, 2.0] }
+[case.out]
+v0 = { u32 = [0, 0, 0, 0] }
+cr6 = "eq"
+
+[[case]]
+name = "out_of_bounds_flags"
+mnemonic = "vcmpbfp128."
+source = "xenia src/xenia/cpu/ppc/ppc_emit_altivec.cc InstrEmit_vcmpbfp_ (x64: VectorCompareSGT/SGE FLOAT32 = vcmpgtps/vcmpgeps)"
+insns = [0x180111C0]   # vcmpbfp128. v0,v1,v2
+[case.in]
+v1 = { f32 = [3.0, -3.0, 2.0, -2.0] }
+v2 = { f32 = [2.0, 2.0, 2.0, 2.0] }
+[case.out]
+v0 = { u32 = [0x80000000, 0x40000000, 0, 0] }
+cr6 = { lt = 0, gt = 0, eq = 0, so = 0 }
+
+[[case]]
+name = "all_above_sets_cr6_lt_xenia"
+mnemonic = "vcmpbfp128."
+source = "xenia PPCHIRBuilder::UpdateCR6(gt | lt): cr6_all_equal (lt) when every lane is 0xFFFFFFFF, i.e. every lane out of bounds. ISA would leave cr6 clear here"
+insns = [0x180111C0]   # vcmpbfp128. v0,v1,v2
+[case.in]
+v1 = { f32 = [3.0, 4.0, 100.0, 2.5] }
+v2 = { f32 = [2.0, 2.0, 2.0, 2.0] }
+[case.out]
+v0 = { u32 = [0x80000000, 0x80000000, 0x80000000, 0x80000000] }
+cr6 = { lt = 1, gt = 0, eq = 0, so = 0 }
+
+[[case]]
+name = "all_below_sets_cr6_lt_xenia"
+mnemonic = "vcmpbfp128."
+source = "xenia PPCHIRBuilder::UpdateCR6(gt | lt): every lane out of bounds on the low side -> cr6.lt. ISA would leave cr6 clear here"
+insns = [0x180111C0]   # vcmpbfp128. v0,v1,v2
+[case.in]
+v1 = { f32 = [-3.0, -4.0, -100.0, -2.5] }
+v2 = { f32 = [2.0, 2.0, 2.0, 2.0] }
+[case.out]
+v0 = { u32 = [0x40000000, 0x40000000, 0x40000000, 0x40000000] }
+cr6 = { lt = 1, gt = 0, eq = 0, so = 0 }
+
+[[case]]
+name = "all_out_both_sides_sets_cr6_lt_xenia"
+mnemonic = "vcmpbfp128."
+source = "xenia PPCHIRBuilder::UpdateCR6(gt | lt): lanes out on different sides still make (gt | lt) all ones -> cr6.lt"
+insns = [0x180111C0]   # vcmpbfp128. v0,v1,v2
+[case.in]
+v1 = { f32 = [3.0, -3.0, 10.0, -10.0] }
+v2 = { f32 = [2.0, 2.0, 2.0, 2.0] }
+[case.out]
+v0 = { u32 = [0x80000000, 0x40000000, 0x80000000, 0x40000000] }
+cr6 = { lt = 1, gt = 0, eq = 0, so = 0 }
+
+[[case]]
+name = "per_lane_bounds"
+mnemonic = "vcmpbfp128."
+source = "xenia InstrEmit_vcmpbfp_: b is per lane; lanes 0..3 use bounds 1, 10, 0.5, 1000"
+insns = [0x180111C0]   # vcmpbfp128. v0,v1,v2
+[case.in]
+v1 = { f32 = [1.5, 10.0, -0.75, -999.0] }
+v2 = { f32 = [1.0, 10.0, 0.5, 1000.0] }
+[case.out]
+v0 = { u32 = [0x80000000, 0, 0x40000000, 0] }
+cr6 = ""
+
+[[case]]
+name = "negative_b_sets_both_bits"
+mnemonic = "vcmpbfp128."
+source = "xenia InstrEmit_vcmpbfp_: with b < 0 the bounds invert; a > b and a < -b can both hold (0xC0000000) and nothing is in bounds -> UpdateCR6 cr6.lt"
+insns = [0x180111C0]   # vcmpbfp128. v0,v1,v2
+[case.in]
+v1 = { f32 = [0.0, 3.0, -3.0, -2.0] }
+v2 = { f32 = [-2.0, -2.0, -2.0, -2.0] }
+[case.out]
+v0 = { u32 = [0xC0000000, 0x80000000, 0x40000000, 0x40000000] }
+cr6 = { lt = 1, gt = 0, eq = 0, so = 0 }
+
+[[case]]
+name = "negative_b_mixed_with_positive"
+mnemonic = "vcmpbfp128."
+source = "xenia InstrEmit_vcmpbfp_: Neg(vb) is a sign flip (x64 NEG V128 = vxorps XMMSignMaskPS); lane 3 in bounds keeps cr6 clear"
+insns = [0x180111C0]   # vcmpbfp128. v0,v1,v2
+[case.in]
+v1 = { f32 = [1.0, -1.0, 0.0, 1.0] }
+v2 = { f32 = [-1.0, -1.0, -1.0, 1.0] }
+[case.out]
+v0 = { u32 = [0x80000000, 0x40000000, 0xC0000000, 0] }
+cr6 = ""
+
+# ---------------------------------------------------------------------------------------
+# Special values.
+
+[[case]]
+name = "signed_zero_is_in_bounds"
+mnemonic = "vcmpbfp128."
+source = "xenia InstrEmit_vcmpbfp_: +0 and -0 compare equal, so 0 > 0 is false and 0 >= -0 is true for every sign combination"
+insns = [0x180111C0]   # vcmpbfp128. v0,v1,v2
+[case.in]
+v1 = { f32 = [0.0, -0.0, 0.0, -0.0] }
+v2 = { f32 = [0.0, 0.0, -0.0, -0.0] }
+[case.out]
+v0 = { u32 = [0, 0, 0, 0] }
+cr6 = "eq"
+
+[[case]]
+name = "signed_zero_a_positive_b"
+mnemonic = "vcmpbfp128."
+source = "xenia InstrEmit_vcmpbfp_: -0 and +0 are inside any positive bound; b = +-0 against nonzero a is out of bounds"
+insns = [0x180111C0]   # vcmpbfp128. v0,v1,v2
+[case.in]
+v1 = { f32 = [0.0, -0.0, 1.0, -1.0] }
+v2 = { f32 = [1.0, 1.0, -0.0, 0.0] }
+[case.out]
+v0 = { u32 = [0, 0, 0x80000000, 0x40000000] }
+cr6 = ""
+
+[[case]]
+name = "inf_operands"
+mnemonic = "vcmpbfp128."
+source = "xenia InstrEmit_vcmpbfp_: +inf > b, -inf < -b; a=1 vs b=+inf is in bounds; a=1 vs b=-inf is 1 > -inf and 1 < +inf -> 0xC0000000"
+insns = [0x180111C0]   # vcmpbfp128. v0,v1,v2
+[case.in]
+v1 = { f32 = ["inf", "-inf", 1.0, 1.0] }
+v2 = { f32 = [1.0, 1.0, "inf", "-inf"] }
+[case.out]
+v0 = { u32 = [0x80000000, 0x40000000, 0, 0xC0000000] }
+cr6 = ""
+
+[[case]]
+name = "inf_bound_contains_everything"
+mnemonic = "vcmpbfp128."
+source = "xenia InstrEmit_vcmpbfp_: inf > inf is false and -inf >= -inf is true, so +-inf and FLT_MAX-ish values are inside b = +inf -> cr6.eq"
+insns = [0x180111C0]   # vcmpbfp128. v0,v1,v2
+[case.in]
+v1 = { f32 = ["inf", "-inf", 3.0e38, -3.0e38] }
+v2 = { f32 = ["inf", "inf", "inf", "inf"] }
+[case.out]
+v0 = { u32 = [0, 0, 0, 0] }
+cr6 = "eq"
+
+[[case]]
+name = "nan_in_a_sets_only_bit30_xenia"
+mnemonic = "vcmpbfp128."
+source = "DIVERGES FROM ISA (which gives 0xC0000000 for NaN). xenia InstrEmit_vcmpbfp_: gt = VectorCompareSGT FLOAT32 = vcmpgtps (ordered, NaN -> 0), lt = Not(VectorCompareSGE = vcmpgeps, ordered, NaN -> 0) = all ones -> 0x40000000"
+insns = [0x180111C0]   # vcmpbfp128. v0,v1,v2
+[case.in]
+v1 = { f32 = ["nan", 1.0, "0xFFC00000", -1.0] }   # quiet NaN, in bounds, negative quiet NaN, in bounds
+v2 = { f32 = [2.0, 2.0, 2.0, 2.0] }
+[case.out]
+v0 = { u32 = [0x40000000, 0, 0x40000000, 0] }
+cr6 = ""
+
+[[case]]
+name = "nan_in_b_sets_only_bit30_xenia"
+mnemonic = "vcmpbfp128."
+source = "DIVERGES FROM ISA (0xC0000000). xenia InstrEmit_vcmpbfp_: Neg(NaN) is still NaN, a >= NaN is false under vcmpgeps, so lt is set and gt (a > NaN) is not -> 0x40000000. Signalling NaN (0x7F800001) behaves the same"
+insns = [0x180111C0]   # vcmpbfp128. v0,v1,v2
+[case.in]
+v1 = { f32 = [1.0, 1.0, 1.0, 1.0] }
+v2 = { f32 = ["nan", 2.0, "0x7F800001", 2.0] }
+[case.out]
+v0 = { u32 = [0x40000000, 0, 0x40000000, 0] }
+cr6 = ""
+
+[[case]]
+name = "nan_every_lane_sets_cr6_lt_xenia"
+mnemonic = "vcmpbfp128."
+source = "DIVERGES FROM ISA. xenia: every lane NaN -> every lane 0x40000000 (lt mask all ones), and UpdateCR6(gt | lt) with all ones -> cr6.lt"
+insns = [0x180111C0]   # vcmpbfp128. v0,v1,v2
+[case.in]
+v1 = { f32 = ["nan", "nan", 5.0, "nan"] }
+v2 = { f32 = [2.0, "nan", "nan", "nan"] }
+[case.out]
+v0 = { u32 = [0x40000000, 0x40000000, 0x40000000, 0x40000000] }
+cr6 = { lt = 1, gt = 0, eq = 0, so = 0 }
+
+# ---------------------------------------------------------------------------------------
+# Non-record form and the two register combinations Halo Wars uses.
+
+[[case]]
+name = "non_record_leaves_cr6_alone"
+mnemonic = "vcmpbfp128"
+source = "xenia InstrEmit_vcmpbfp_: UpdateCR6 only when rc. cr6 is preloaded with every bit set and must survive"
+insns = [0x18011180]   # vcmpbfp128 v0,v1,v2
+[case.in]
+v1 = { f32 = [3.0, -3.0, 2.0, "nan"] }
+v2 = { f32 = [2.0, 2.0, 2.0, 2.0] }
+cr6 = "lt|gt|eq|so"
+[case.out]
+v0 = { u32 = [0x80000000, 0x40000000, 0, 0x40000000] }
+cr6 = "lt|gt|eq|so"
+
+[[case]]
+name = "non_record_all_in_bounds_leaves_cr6_alone"
+mnemonic = "vcmpbfp128"
+source = "xenia InstrEmit_vcmpbfp_: UpdateCR6 only when rc; an all-in-bounds result must not set cr6.eq"
+insns = [0x18011180]   # vcmpbfp128 v0,v1,v2
+[case.in]
+v1 = { f32 = [1.0, -1.0, 0.5, 2.0] }
+v2 = { f32 = [2.0, 2.0, 2.0, 2.0] }
+cr6 = "so"
+[case.out]
+v0 = { u32 = [0, 0, 0, 0] }
+cr6 = "so"
+
+[[case]]
+name = "game_v63_v63_v62_out_of_bounds"
+mnemonic = "vcmpbfp128."
+source = "Halo Wars site (vd aliases va; the game then does mfocrf r11,2 / rlwinm. r11,r11,0,26,26 / beq, i.e. reads only cr6.eq). xenia InstrEmit_vcmpbfp_"
+insns = [0x1BFFF1E5]   # vcmpbfp128. v63,v63,v62
+[case.in]
+v63 = { f32 = [1.0, 3.0, -3.0, 0.5] }
+v62 = { f32 = [2.0, 2.0, 2.0, 2.0] }
+[case.out]
+v63 = { u32 = [0, 0x80000000, 0x40000000, 0] }
+v62 = { f32 = [2.0, 2.0, 2.0, 2.0] }
+cr6 = ""
+
+[[case]]
+name = "game_v63_v63_v62_in_bounds"
+mnemonic = "vcmpbfp128."
+source = "Halo Wars site (vd aliases va). xenia InstrEmit_vcmpbfp_ + UpdateCR6 -> cr6.eq"
+insns = [0x1BFFF1E5]   # vcmpbfp128. v63,v63,v62
+[case.in]
+v63 = { f32 = [1.0, -1.0, 1.5, -1.5] }
+v62 = { f32 = [2.0, 2.0, 2.0, 2.0] }
+[case.out]
+v63 = { u32 = [0, 0, 0, 0] }
+v62 = { f32 = [2.0, 2.0, 2.0, 2.0] }
+cr6 = "eq"
+
+[[case]]
+name = "game_v63_v63_v57_in_bounds"
+mnemonic = "vcmpbfp128."
+source = "Halo Wars site (vd aliases va; the game reads cr6.eq via mfocrf r11,2 / rlwinm. 26,26 / bne). xenia InstrEmit_vcmpbfp_ + UpdateCR6 -> cr6.eq"
+insns = [0x1BFFC9E5]   # vcmpbfp128. v63,v63,v57
+[case.in]
+v63 = { f32 = [0.1, -0.2, 0.3, -0.4] }
+v57 = { f32 = [1.0, 1.0, 1.0, 1.0] }
+[case.out]
+v63 = { u32 = [0, 0, 0, 0] }
+v57 = { f32 = [1.0, 1.0, 1.0, 1.0] }
+cr6 = "eq"
+
+[[case]]
+name = "game_v63_v63_v57_one_lane_out"
+mnemonic = "vcmpbfp128."
+source = "Halo Wars site (vd aliases va). xenia InstrEmit_vcmpbfp_: a single out-of-bounds lane clears cr6.eq"
+insns = [0x1BFFC9E5]   # vcmpbfp128. v63,v63,v57
+[case.in]
+v63 = { f32 = [0.1, -0.2, 0.3, -1.5] }
+v57 = { f32 = [1.0, 1.0, 1.0, 1.0] }
+[case.out]
+v63 = { u32 = [0, 0, 0, 0x40000000] }
+v57 = { f32 = [1.0, 1.0, 1.0, 1.0] }
+cr6 = ""

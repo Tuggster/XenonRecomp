@@ -1831,7 +1831,26 @@ bool Recompiler::Recompile(
 
     case PPC_INST_VCMPBFP:
     case PPC_INST_VCMPBFP128:
-        println("\t__builtin_debugtrap();");
+        // Bounds compare, after Xenia's InstrEmit_vcmpbfp_ (ppc_emit_altivec.cc):
+        //   bit 31 = a > b             (vcmpgtps, ordered)
+        //   bit 30 = !(a >= -b)        (NOT vcmpgeps, ordered; -b is a sign flip)
+        // Xenia diverges from the ISA on NaN: the ISA sets both bits (0xC0000000),
+        // Xenia's ordered gt is false, so a NaN in either operand yields 0x40000000.
+        // Do not use simde_mm_cmpnge_ps here: SIMDe lowers it to cmplt_ps, which is
+        // ordered and would clear bit 30 for NaN; andnot(cmpge) is the exact NOT.
+        printSetFlushMode(true);
+        println("\tsimde_mm_store_ps({0}.f32, simde_mm_or_ps("
+                "simde_mm_and_ps(simde_mm_cmpgt_ps(simde_mm_load_ps({1}.f32), simde_mm_load_ps({2}.f32)), simde_mm_castsi128_ps(simde_mm_set1_epi32(int(0x80000000)))), "
+                "simde_mm_andnot_ps(simde_mm_cmpge_ps(simde_mm_load_ps({1}.f32), simde_mm_xor_ps(simde_mm_load_ps({2}.f32), simde_mm_castsi128_ps(simde_mm_set1_epi32(int(0x80000000))))), simde_mm_castsi128_ps(simde_mm_set1_epi32(0x40000000)))));",
+                v(insn.operands[0]), v(insn.operands[1]), v(insn.operands[2]));
+        if (strchr(insn.opcode->name, '.'))
+        {
+            // Xenia: UpdateCR6(gt | lt) -> lt = every lane out of bounds, eq = every lane
+            // in bounds, gt = so = 0. (The ISA only defines eq; lt is a Xenia-ism.)
+            // A lane is out of bounds iff bit 31 or bit 30 of its result is set; x | x << 1
+            // folds bit 30 into the sign bit so movemask_ps in setFromMask sees either.
+            println("\t{0}.setFromMask(simde_mm_castsi128_ps(simde_mm_or_si128(simde_mm_load_si128((simde__m128i*){1}.u32), simde_mm_slli_epi32(simde_mm_load_si128((simde__m128i*){1}.u32), 1))), 0xF);", cr(6), v(insn.operands[0]));
+        }
         break;
 
     case PPC_INST_VCMPEQFP:
