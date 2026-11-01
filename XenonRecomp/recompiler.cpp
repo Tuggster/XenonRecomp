@@ -766,11 +766,12 @@ bool Recompiler::Recompile(
         break;
 
     case PPC_INST_CCTPL:
-        // no op
-        break;
-
     case PPC_INST_CCTPM:
-        // no op
+    case PPC_INST_CCTPH:
+        // Thread priority hints (or r1,r1,r1 / or r2,r2,r2 / or r3,r3,r3): the Xenon lowers or
+        // raises the hardware thread's dispatch priority, typically around a spin-wait. The host
+        // scheduler has no per-instruction equivalent and the register is unchanged, so nothing
+        // is emitted (as Xenia, which decodes them as plain `or`).
         break;
 
     case PPC_INST_CLRLDI:
@@ -823,8 +824,14 @@ bool Recompiler::Recompile(
         println("\t{0}.u64 = {1}.u32 == 0 ? 32 : __builtin_clz({1}.u32);", r(insn.operands[0]), r(insn.operands[1]));
         break;
 
+    case PPC_INST_DB8CYC:
+    case PPC_INST_DB10CYC:
+    case PPC_INST_DB12CYC:
     case PPC_INST_DB16CYC:
-        // no op
+        // Delay hints (or rX,rX,rX with X = 28..31): the guest is busy-waiting. The register is
+        // unchanged; emit the host's spin-wait hint (arm64 `yield`, x86 `pause`), which a runtime
+        // can redefine through PPC_SPIN_HINT (ppc_context.h).
+        println("\tPPC_SPIN_HINT();");
         break;
 
     case PPC_INST_DCBF:

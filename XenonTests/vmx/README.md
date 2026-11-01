@@ -65,6 +65,7 @@ Fields:
 | `mnemonic` | Optional guard: the first word must decode to this name (as in `thirdparty/disasm/ppc-dis.c`, e.g. `"vcmpbfp128."` for the record form). |
 | `xfail` | Optional. `true` marks a known failure; see below. |
 | `analyze` | Optional. `true` sizes the case's function with `Function::Analyze` (what XenonRecomp does for a function without a `.pdata` entry) instead of the word count, so a wrong boundary shows up as missing side effects. The failure message reports how many words the analyzer kept. See `cases/bclr_conditional.toml`. |
+| `emits` | Optional. A string or array of strings the recompiled C++ for the case must contain (for instructions with no architectural effect, e.g. `PPC_SPIN_HINT();` in `cases/spin_hints.toml`). |
 | `[case.in]` | Initial state. Everything not listed is zero. |
 | `[case.out]` | Expected state after execution; only listed registers are checked. Required, non-empty. |
 
