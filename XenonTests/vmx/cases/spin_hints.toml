@@ -1,0 +1,103 @@
+# Spin-wait and thread-priority hints. On the Xenon these are encodings of `or rX,rX,rX`, which
+# leaves the register unchanged:
+#   cctpl 0x7C210B78 (or r1,r1,r1)    cctpm 0x7C421378 (or r2,r2,r2)    cctph 0x7C631B78 (or r3,r3,r3)
+#   db8cyc 0x7F9CE378 (or r28,...)    db10cyc 0x7FBDEB78 (r29)    db12cyc 0x7FDEF378 (r30)    db16cyc 0x7FFFFB78 (r31)
+# XenonRecomp emitted nothing for db16cyc/cctpl/cctpm, and cctph and db8/10/12cyc were
+# unrecognized (they trapped). The delay forms now emit PPC_SPIN_HINT() (arm64 `yield`, x86
+# `pause`), so a recompiled busy-wait tells the host core it is spinning; the priority hints
+# still emit nothing. Halo Wars' D3D ring-space wait (sub_82209E18) is `cctpl; 4 x (8 x db16cyc);
+# cctpm` before each poll. Xenia: ppc_emit_alu.cc InstrEmit_orx treats or rX,rX,rX as a no-op.
+
+[[case]]
+name = "db16cyc_emits_spin_hint_and_keeps_r31"
+mnemonic = "db16cyc"
+source = "xenia src/xenia/cpu/ppc/ppc_emit_alu.cc InstrEmit_orx (RA == RS == RB, Rc = 0: no-op)"
+insns = [0x7FFFFB78]
+emits = "PPC_SPIN_HINT();"
+[case.in]
+r31 = "0x123456789ABCDEF0"
+[case.out]
+r31 = "0x123456789ABCDEF0"
+cr0 = ""
+
+[[case]]
+name = "db12cyc_emits_spin_hint_and_keeps_r30"
+mnemonic = "db12cyc"
+source = "xenia src/xenia/cpu/ppc/ppc_emit_alu.cc InstrEmit_orx (no-op form)"
+insns = [0x7FDEF378]
+emits = "PPC_SPIN_HINT();"
+[case.in]
+r30 = "0xFFFFFFFF80000001"
+[case.out]
+r30 = "0xFFFFFFFF80000001"
+
+[[case]]
+name = "db10cyc_emits_spin_hint_and_keeps_r29"
+mnemonic = "db10cyc"
+source = "xenia src/xenia/cpu/ppc/ppc_emit_alu.cc InstrEmit_orx (no-op form)"
+insns = [0x7FBDEB78]
+emits = "PPC_SPIN_HINT();"
+[case.in]
+r29 = 7
+[case.out]
+r29 = 7
+
+[[case]]
+name = "db8cyc_emits_spin_hint_and_keeps_r28"
+mnemonic = "db8cyc"
+source = "xenia src/xenia/cpu/ppc/ppc_emit_alu.cc InstrEmit_orx (no-op form)"
+insns = [0x7F9CE378]
+emits = "PPC_SPIN_HINT();"
+[case.in]
+r28 = "0x8000000000000000"
+[case.out]
+r28 = "0x8000000000000000"
+
+[[case]]
+name = "cctpl_keeps_r1"
+mnemonic = "cctpl"
+source = "xenia src/xenia/cpu/ppc/ppc_emit_alu.cc InstrEmit_orx (no-op form); priority hint, nothing emitted"
+insns = [0x7C210B78]
+[case.in]
+r1 = 0x7FFF0000
+[case.out]
+r1 = 0x7FFF0000
+
+[[case]]
+name = "cctpm_keeps_r2"
+mnemonic = "cctpm"
+source = "xenia src/xenia/cpu/ppc/ppc_emit_alu.cc InstrEmit_orx (no-op form); priority hint, nothing emitted"
+insns = [0x7C421378]
+[case.in]
+r2 = "0xDEADBEEFCAFEF00D"
+[case.out]
+r2 = "0xDEADBEEFCAFEF00D"
+
+[[case]]
+name = "cctph_keeps_r3"
+mnemonic = "cctph"
+source = "xenia src/xenia/cpu/ppc/ppc_emit_alu.cc InstrEmit_orx (no-op form); priority hint, nothing emitted (was unrecognized)"
+insns = [0x7C631B78]
+[case.in]
+r3 = 0x12345678
+[case.out]
+r3 = 0x12345678
+
+[[case]]
+name = "halo_wars_ring_wait_delay_loop"
+source = "Halo Wars sub_82209E18 at 0x82209E2C: li r11,4; cctpl; loop: 8 x db16cyc; addic. r11,r11,-1; bne loop; cctpm. xenia ppc_emit_alu.cc InstrEmit_orx / InstrEmit_addicx"
+insns = [0x39600004, 0x7C210B78,
+         0x7FFFFB78, 0x7FFFFB78, 0x7FFFFB78, 0x7FFFFB78, 0x7FFFFB78, 0x7FFFFB78, 0x7FFFFB78, 0x7FFFFB78,
+         0x356BFFFF, 0x4082FFDC, 0x7C421378]
+emits = "PPC_SPIN_HINT();"
+[case.in]
+r1 = 0x7FFF0000
+r2 = 0x1234
+r31 = "0x0000000082209E18"
+[case.out]
+r11 = 0
+cr0 = "eq"
+xer = { so = 0, ov = 0, ca = 1 }
+r1 = 0x7FFF0000
+r2 = 0x1234
+r31 = "0x0000000082209E18"

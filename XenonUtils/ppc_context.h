@@ -16,6 +16,25 @@
 #include <x86/sse.h>
 #include <x86/sse4.1.h>
 
+// Spin-wait hint for the Xenon delay forms db8cyc/db10cyc/db12cyc/db16cyc, which the guest issues
+// in busy-wait loops. Defaults to the host's spin hint; a runtime may define PPC_SPIN_HINT before
+// including this header (e.g. through a forced include) to back off differently.
+#ifndef PPC_SPIN_HINT
+#if defined(__aarch64__) || defined(_M_ARM64)
+#if defined(_MSC_VER) && !defined(__clang__)
+#define PPC_SPIN_HINT() __yield()
+#else
+#define PPC_SPIN_HINT() __builtin_arm_yield()
+#endif
+#elif defined(__x86_64__) || defined(__i386__)
+#define PPC_SPIN_HINT() __builtin_ia32_pause()
+#elif defined(_M_X64) || defined(_M_IX86)
+#define PPC_SPIN_HINT() _mm_pause()
+#else
+#define PPC_SPIN_HINT() ((void)0)
+#endif
+#endif
+
 // SSE3 constants are missing from simde
 #ifndef _MM_DENORMALS_ZERO_MASK
 #define _MM_DENORMALS_ZERO_MASK 0x0040

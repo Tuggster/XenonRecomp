@@ -672,6 +672,7 @@ namespace
         std::vector<uint32_t> callee;   // optional second function, laid out after insns (blr implicit)
         bool xfail = false;
         bool analyze = false;           // size the function with Function::Analyze instead of the word count
+        std::vector<std::string> emits; // text the recompiled C++ must contain
         std::string setup;
         std::string checks;
 
@@ -705,13 +706,13 @@ namespace
 
     void parseCase(const toml::table& tbl, GenCase& c)
     {
-        static const char* kKeys[] = { "name", "source", "insns", "callee", "xfail", "analyze", "mnemonic", "in", "out" };
+        static const char* kKeys[] = { "name", "source", "insns", "callee", "xfail", "analyze", "mnemonic", "emits", "in", "out" };
         for (auto&& [key, value] : tbl)
         {
             bool known = false;
             for (auto k : kKeys) known |= key.str() == k;
             if (!known)
-                fail("unknown key '{}' (name, source, insns, callee, xfail, analyze, mnemonic, in, out)", key.str());
+                fail("unknown key '{}' (name, source, insns, callee, xfail, analyze, mnemonic, emits, in, out)", key.str());
         }
 
         auto name = tbl["name"].value<std::string>();
@@ -738,6 +739,23 @@ namespace
             auto b = analyze->value<bool>();
             if (!b) fail("analyze must be true or false");
             c.analyze = *b;
+        }
+
+        if (auto emits = tbl.get("emits"))
+        {
+            if (auto text = emits->value<std::string>())
+                c.emits.push_back(*text);
+            else if (auto arr = emits->as_array())
+            {
+                for (size_t i = 0; i < arr->size(); i++)
+                {
+                    auto text = arr->get(i)->value<std::string>();
+                    if (!text) fail("emits[{}] must be a string", i);
+                    c.emits.push_back(*text);
+                }
+            }
+            else
+                fail("emits must be a string or an array of strings");
         }
 
         c.insns = parseWords(tbl.get("insns"), "insns");
@@ -1016,6 +1034,17 @@ int main(int argc, char* argv[])
             c.notImplemented = fmt::format("recompiler does not recognize the instruction ({})", joined);
         else if (emitted.find("__builtin_debugtrap") != std::string_view::npos)
             c.notImplemented = fmt::format("{} emits __builtin_debugtrap() (instruction form not implemented in XenonRecomp)", joined);
+        else
+        {
+            for (const std::string& text : c.emits)
+            {
+                if (emitted.find(text) == std::string_view::npos)
+                {
+                    c.notImplemented = fmt::format("{}: the recompiled code does not contain \"{}\"", joined, text);
+                    break;
+                }
+            }
+        }
     }
 
     writeOutput(outPath, group, recompiler.out, cases);
